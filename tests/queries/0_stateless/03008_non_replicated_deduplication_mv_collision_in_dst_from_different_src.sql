@@ -51,7 +51,7 @@ CREATE MATERIALIZED VIEW mv_b_even_wo_dedup
         FROM table_source
         WHERE b % 2 = 0;
 
-CREATE MATERIALIZED VIEW mv_b_even_wo_even_dedup
+CREATE MATERIALIZED VIEW mv_b_even_even_wo_dedup
     TO table_dst_wo_dedup
     AS
     SELECT a, b
@@ -80,7 +80,7 @@ SELECT 'table_source';
 SELECT 'count', count() FROM table_source;
 SELECT _part, count() FROM table_source GROUP BY _part ORDER BY _part;
 
-SELECT 'table_dst_dedup';
+SELECT 'table_dst_dedup, it deduplicates rows from different mv within one inse';
 SELECT 'count', count() FROM table_dst_dedup;
 SELECT _part, count() FROM table_dst_dedup GROUP BY _part ORDER BY _part;
 
@@ -102,6 +102,60 @@ SELECT 'count', count() FROM table_source;
 SELECT _part, count() FROM table_source GROUP BY _part ORDER BY _part;
 
 SELECT 'table_dst_dedup, block from different mv is deduplicated, it is wrong';
+SELECT 'count', count() FROM table_dst_dedup;
+SELECT _part, count() FROM table_dst_dedup GROUP BY _part ORDER BY _part;
+
+SELECT 'table_dst_wo_dedup';
+SELECT 'count', count() FROM table_dst_wo_dedup;
+SELECT _part, count() FROM table_dst_wo_dedup GROUP BY _part ORDER BY _part;
+
+
+TRUNCATE TABLE mv_b_even_dedup;
+TRUNCATE TABLE mv_b_even_even_dedup;
+TRUNCATE TABLE mv_b_even_wo_dedup;
+TRUNCATE TABLE mv_b_even_even_wo_dedup;
+TRUNCATE TABLE table_dst_dedup;
+TRUNCATE TABLE table_dst_wo_dedup;
+TRUNCATE TABLE table_source;
+
+
+SELECT 'with user defined token'
+SETTINGS send_logs_level='trace';
+
+SELECT 'first insert'
+SETTINGS send_logs_level='trace';
+
+INSERT INTO table_source
+SELECT 'source_' || toString(number), number
+FROM numbers(8)
+SETTINGS insert_deduplication_token='insert_deduplication_token_from_user', send_logs_level='trace';
+
+SELECT 'table_source';
+SELECT 'count', count() FROM table_source;
+SELECT _part, count() FROM table_source GROUP BY _part ORDER BY _part;
+
+SELECT 'table_dst_dedup';
+SELECT 'count', count() FROM table_dst_dedup;
+SELECT _part, count() FROM table_dst_dedup GROUP BY _part ORDER BY _part;
+
+SELECT 'table_dst_wo_dedup';
+SELECT 'count', count() FROM table_dst_wo_dedup;
+SELECT _part, count() FROM table_dst_wo_dedup GROUP BY _part ORDER BY _part;
+
+
+SELECT 'second insert'
+SETTINGS send_logs_level='trace';
+
+INSERT INTO table_source
+SELECT 'source_' || toString(number), number
+FROM numbers(8)
+SETTINGS insert_deduplication_token='insert_deduplication_token_from_user', send_logs_level='trace';
+
+SELECT 'table_source';
+SELECT 'count', count() FROM table_source;
+SELECT _part, count() FROM table_source GROUP BY _part ORDER BY _part;
+
+SELECT 'table_dst_dedup';
 SELECT 'count', count() FROM table_dst_dedup;
 SELECT _part, count() FROM table_dst_dedup GROUP BY _part ORDER BY _part;
 

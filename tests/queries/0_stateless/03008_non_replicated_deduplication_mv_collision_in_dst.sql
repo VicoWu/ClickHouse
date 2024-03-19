@@ -83,6 +83,18 @@ SELECT 'source_' || toString(number), number
 FROM numbers(5)
 SETTINGS send_logs_level='trace';
 
+SELECT 'table_a_b';
+SELECT 'count', count() FROM table_a_b;
+SELECT _part, count() FROM table_a_b GROUP BY _part;
+
+SELECT 'table_when_b_even_dedup, here the result if join is deduplicated inside one request, it is not correct';
+SELECT 'count', count() FROM table_when_b_even_dedup;
+SELECT _part, count() FROM table_when_b_even_dedup GROUP BY _part;
+
+SELECT 'table_when_b_even_wo_dedup';
+SELECT 'count', count() FROM table_when_b_even_wo_dedup;
+SELECT _part, count() FROM table_when_b_even_wo_dedup GROUP BY _part ORDER BY _part;
+
 
 SELECT 'second insert'
 SETTINGS send_logs_level='trace';
@@ -91,6 +103,60 @@ INSERT INTO table_a_b
 SELECT 'source_' || toString(number), number
 FROM numbers(5)
 SETTINGS send_logs_level='trace';
+
+
+SELECT 'table_a_b';
+SELECT 'count', count() FROM table_a_b;
+SELECT _part, count() FROM table_a_b GROUP BY _part;
+
+SELECT 'table_when_b_even_dedup, here the result if join is deduplicated inside one request, it is not correct';
+SELECT 'count', count() FROM table_when_b_even_dedup;
+SELECT _part, count() FROM table_when_b_even_dedup GROUP BY _part;
+
+SELECT 'table_when_b_even_wo_dedup';
+SELECT 'count', count() FROM table_when_b_even_wo_dedup;
+SELECT _part, count() FROM table_when_b_even_wo_dedup GROUP BY _part ORDER BY _part;
+
+
+TRUNCATE TABLE mv_b_even_dedup;
+TRUNCATE TABLE table_when_b_even_dedup;
+TRUNCATE TABLE mv_b_even_wo_dedup;
+TRUNCATE TABLE table_when_b_even_wo_dedup;
+TRUNCATE TABLE table_a_b;
+
+
+SELECT 'with user defined token'
+SETTINGS send_logs_level='trace';
+
+
+SELECT 'first insert'
+SETTINGS send_logs_level='trace';
+
+INSERT INTO table_a_b
+SELECT 'source_' || toString(number), number
+FROM numbers(5)
+SETTINGS insert_deduplication_token='insert_deduplication_token_from_user', send_logs_level='trace';
+
+SELECT 'table_a_b';
+SELECT 'count', count() FROM table_a_b;
+SELECT _part, count() FROM table_a_b GROUP BY _part;
+
+SELECT 'table_when_b_even_dedup, here the result if join is deduplicated inside one request, it is not correct';
+SELECT 'count', count() FROM table_when_b_even_dedup;
+SELECT _part, count() FROM table_when_b_even_dedup GROUP BY _part;
+
+SELECT 'table_when_b_even_wo_dedup';
+SELECT 'count', count() FROM table_when_b_even_wo_dedup;
+SELECT _part, count() FROM table_when_b_even_wo_dedup GROUP BY _part ORDER BY _part;
+
+
+SELECT 'second insert'
+SETTINGS send_logs_level='trace';
+
+INSERT INTO table_a_b
+SELECT 'source_' || toString(number), number
+FROM numbers(5)
+SETTINGS insert_deduplication_token='insert_deduplication_token_from_user', send_logs_level='trace';
 
 
 SELECT 'table_a_b';

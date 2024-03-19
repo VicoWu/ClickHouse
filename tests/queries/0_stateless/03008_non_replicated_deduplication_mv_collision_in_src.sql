@@ -41,7 +41,7 @@ SELECT 'first insert'
 SETTINGS send_logs_level='trace';
 
 INSERT INTO table_a_b
-SELECT 'source_' || toString(1), 1
+SELECT 'source_' || toString(0), 0
 FROM numbers(5)
 SETTINGS send_logs_level='trace';
 
@@ -58,9 +58,51 @@ SELECT 'second insert'
 SETTINGS send_logs_level='trace';
 
 INSERT INTO table_a_b
-SELECT 'source_' || toString(1), 1
+SELECT 'source_' || toString(0), 0
 FROM numbers(5)
 SETTINGS send_logs_level='trace';
+
+SELECT 'table_a_b';
+SELECT 'count', count() FROM table_a_b;
+SELECT _part, count() FROM table_a_b GROUP BY _part;
+
+SELECT 'table_when_b_even';
+SELECT 'count', count() FROM table_when_b_even;
+SELECT _part, count() FROM table_when_b_even GROUP BY _part;
+
+
+TRUNCATE  TABLE mv_b_even;
+TRUNCATE  TABLE table_when_b_even;
+TRUNCATE  TABLE table_a_b;
+
+
+SELECT 'with user defined token'
+SETTINGS send_logs_level='trace';
+
+SELECT 'first insert'
+SETTINGS send_logs_level='trace';
+
+INSERT INTO table_a_b
+SELECT 'source_' || toString(0), 0
+FROM numbers(5)
+SETTINGS insert_deduplication_token='insert_deduplication_token_from_user', send_logs_level='trace';
+
+SELECT 'table_a_b';
+SELECT 'count', count() FROM table_a_b;
+SELECT _part, count() FROM table_a_b GROUP BY _part ORDER BY _part;
+
+SELECT 'table_when_b_even';
+SELECT 'count', count() FROM table_when_b_even;
+SELECT _part, count() FROM table_when_b_even GROUP BY _part ORDER BY _part;
+
+
+SELECT 'second insert'
+SETTINGS send_logs_level='trace';
+
+INSERT INTO table_a_b
+SELECT 'source_' || toString(0), 0
+FROM numbers(5)
+SETTINGS insert_deduplication_token='insert_deduplication_token_from_user', send_logs_level='trace';
 
 SELECT 'table_a_b';
 SELECT 'count', count() FROM table_a_b;
