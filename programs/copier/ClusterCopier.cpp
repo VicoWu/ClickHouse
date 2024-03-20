@@ -374,6 +374,7 @@ zkutil::EphemeralNodeHolder::Ptr ClusterCopier::createTaskWorkerNodeAndWaitIfNee
         auto version = stat.version;
         zookeeper->get(workers_path, &stat);
 
+        // 已经到达最大的worker的数量，持续等待
         if (static_cast<UInt64>(stat.numChildren) >= task_cluster->max_workers)
         {
             LOG_INFO(log, "Too many workers ({}, maximum {}). Postpone processing {}", stat.numChildren, task_cluster->max_workers, description);
@@ -386,6 +387,7 @@ zkutil::EphemeralNodeHolder::Ptr ClusterCopier::createTaskWorkerNodeAndWaitIfNee
         }
         else
         {
+            // worker数量满足要求，可以创建对应的task
             Coordination::Requests ops;
             ops.emplace_back(zkutil::makeSetRequest(workers_version_path, description, version));
             ops.emplace_back(zkutil::makeCreateRequest(current_worker_path, description, zkutil::CreateMode::Ephemeral));
@@ -951,7 +953,7 @@ bool ClusterCopier::tryProcessTable(const ConnectionTimeouts & timeouts, TaskTab
     bool previous_shard_is_instantly_finished = false;
 
     /// Process each partition that is present in cluster
-    for (const String & partition_name : task_table.ordered_partition_names)
+    for (const String & partition_name : task_table.ordered_partition_names) // 逐个partiton开始处理
     {
         if (!task_table.cluster_partitions.contains(partition_name))
             throw Exception(ErrorCodes::LOGICAL_ERROR, "There are no expected partition {}. It is a bug", partition_name);
@@ -970,7 +972,7 @@ bool ClusterCopier::tryProcessTable(const ConnectionTimeouts & timeouts, TaskTab
         /// Process each source shard having current partition and copy current partition
         /// NOTE: shards are sorted by "distance" to current host
         bool has_shard_to_process = false;
-        for (const TaskShardPtr & shard : task_table.all_shards)
+        for (const TaskShardPtr & shard : task_table.all_shards) // 逐个shard开始处理
         {
             /// Does shard have a node with current partition?
             if (!shard->partition_tasks.contains(partition_name))
@@ -1028,6 +1030,7 @@ bool ClusterCopier::tryProcessTable(const ConnectionTimeouts & timeouts, TaskTab
             has_shard_to_process = true;
             for (UInt64 try_num = 1; try_num <= max_shard_partition_tries; ++try_num)
             {
+                //  开始处理partition_task, 这里面会收到max_works的约束
                 task_status = tryProcessPartitionTask(timeouts, partition, is_unprioritized_task);
 
                 /// Exit if success
@@ -1182,6 +1185,7 @@ TaskStatus ClusterCopier::tryProcessPartitionTask(const ConnectionTimeouts & tim
 
     try
     {
+        // 迭代这个partition的所有piece并逐个处理
         res = iterateThroughAllPiecesInPartition(timeouts, task_partition, is_unprioritized_task);
     }
     catch (...)
@@ -1325,7 +1329,7 @@ TaskStatus ClusterCopier::processPartitionPieceTaskImpl(
         return parseQuery(p_query, query, settings.max_query_size, settings.max_parser_depth);
     };
 
-    /// Load balancing
+    /// Load balancing, 如果当前已经到达了最大的worker的数量，会一直hang在这里
     auto worker_node_holder = createTaskWorkerNodeAndWaitIfNeed(zookeeper, current_task_piece_status_path, is_unprioritized_task);
 
     LOG_INFO(log, "Processing {}", current_task_piece_status_path);

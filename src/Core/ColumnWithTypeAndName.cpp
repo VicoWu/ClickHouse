@@ -42,7 +42,7 @@ void ColumnWithTypeAndName::dumpStructure(WriteBuffer & out) const
     dumpNameAndType(out);
 
     if (column)
-        out << ' ' << column->dumpStructure();
+        out << ' ' << column->dumpStructure(); // 搜索 String IColumn::dumpStructure()
     else
         out << " nullptr";
 }

@@ -5,7 +5,7 @@ if (CMAKE_CXX_COMPILER_ID MATCHES "AppleClang")
 elseif (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     set (COMPILER_CLANG 1)
 else ()
-    message (FATAL_ERROR "Compiler ${CMAKE_CXX_COMPILER_ID} is not supported")
+    message (FATAL_ERROR "Compiler ${CMAKE_CXX_COMPILER_ID} is not supported 123")
 endif ()
 
 # Print details to output

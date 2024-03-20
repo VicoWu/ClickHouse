@@ -16,7 +16,7 @@ class WriteBuffer;
   */
 struct ColumnWithTypeAndName
 {
-    ColumnPtr column;
+    ColumnPtr column; // using ColumnPtr = IColumn::Ptr; using Ptr = immutable_ptr<Derived>
     DataTypePtr type;
     String name;
 

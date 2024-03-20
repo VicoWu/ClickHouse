@@ -16,7 +16,7 @@ public:
 using ChunkInfoPtr = std::shared_ptr<const ChunkInfo>;
 
 /**
- * Chunk is a list of columns with the same length.
+ * Chunk is a list of columns  the same lengthwith.
  * Chunk stores the number of rows in a separate field and supports invariant of equal column length.
  *
  * Chunk has move-only semantic. It's more lightweight than block cause doesn't store names, types and index_by_name.
