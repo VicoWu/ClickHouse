@@ -34,10 +34,10 @@ static ReturnType onError(int code [[maybe_unused]],
                           FormatStringHelper<FmtArgs...> fmt_string [[maybe_unused]],
                           FmtArgs && ...fmt_args [[maybe_unused]])
 {
-    if constexpr (std::is_same_v<ReturnType, void>)
+    if constexpr (std::is_same_v<ReturnType, void>) // 如果返回类型是void，那么就抛出异常
         throw Exception(code, std::move(fmt_string), std::forward<FmtArgs>(fmt_args)...);
     else
-        return false;
+        return false; // 仅仅返回false
 }
 
 
