@@ -405,7 +405,7 @@ endif ()
 
 option (ENABLE_FIU "Enable Fiu" ON)
 
-option(WERROR "Enable -Werror compiler option" ON)
+option(WERROR "Enable -Werror compiler option" OFF)
 
 if (WERROR)
     # Don't pollute CMAKE_CXX_FLAGS with -Werror as it will break some CMake checks.
