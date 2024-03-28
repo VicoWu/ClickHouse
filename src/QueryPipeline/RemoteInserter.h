@@ -5,7 +5,6 @@
 #include <IO/ConnectionTimeouts.h>
 #include <Interpreters/ClientInfo.h>
 
-
 namespace DB
 {
 

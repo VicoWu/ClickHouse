@@ -8,7 +8,7 @@
 #include <Interpreters/InternalTextLogsQueue.h>
 #include <IO/ConnectionTimeouts.h>
 #include <Core/Settings.h>
-
+#include <Common/logger_useful.h>
 
 namespace DB
 {
@@ -56,6 +56,7 @@ RemoteInserter::RemoteInserter(
 
     while (true)
     {
+
         Packet packet = connection.receivePacket();
 
         if (Protocol::Server::Data == packet.type)
@@ -85,6 +86,7 @@ RemoteInserter::RemoteInserter(
                 "Unexpected packet from server (expected Data or Exception, got {})",
                 Protocol::Server::toString(packet.type));
     }
+    LOG_WARNING(&Poco::Logger::get("abd"), "wuchang in RemoteInserter, the connection is {}, the block is {}", connection.getHost(), header.dumpStructure());
 }
 
 

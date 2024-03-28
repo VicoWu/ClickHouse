@@ -343,7 +343,7 @@ DistributedSink::runWritingJob(JobReplica & job, const Block & current_block, si
                     dst_column = src_column->cloneEmpty();
             }
         }
-
+        LOG_WARNING(log, "my debug num_shard = {}", num_shards);
         const Block & shard_block = (num_shards > 1) ? job.current_shard_block : current_block;
         const Settings & settings = context->getSettingsRef();
 
@@ -401,7 +401,7 @@ DistributedSink::runWritingJob(JobReplica & job, const Block & current_block, si
             }
 
             CurrentMetrics::Increment metric_increment{CurrentMetrics::DistributedSend};
-
+            // 这里的header其实是 pipeline.input->getHeader()
             Block adopted_shard_block = adoptBlock(job.executor->getHeader(), shard_block, log);
             job.executor->push(adopted_shard_block);
         }

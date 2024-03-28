@@ -6,6 +6,8 @@
 #include <Common/SipHash.h>
 #include <Common/HashTable/Hash.h>
 #include <Processors/Transforms/ColumnGathererTransform.h>
+#include <Common/logger_useful.h>
+#include <boost/stacktrace.hpp>
 
 #include <algorithm>
 #include <bit>
@@ -27,6 +29,7 @@ ColumnSparse::ColumnSparse(MutableColumnPtr && values_)
 
     values->insertDefault();
     offsets = ColumnUInt64::create();
+    LOG_WARNING(&Poco::Logger::get("abd"), "Constructing a sparse column {}, name is {}", to_string(boost::stacktrace::stacktrace()), ColumnSparse::getName());
 }
 
 ColumnSparse::ColumnSparse(MutableColumnPtr && values_, MutableColumnPtr && offsets_, size_t size_)
@@ -57,6 +60,8 @@ ColumnSparse::ColumnSparse(MutableColumnPtr && values_, MutableColumnPtr && offs
     if (it != offsets_data.end())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Offsets of ColumnSparse must be strictly sorted");
 #endif
+    LOG_WARNING(&Poco::Logger::get("abd"), "Constructing a sparse column {}, name is {}", to_string(boost::stacktrace::stacktrace()), ColumnSparse::getName());
+
 }
 
 MutableColumnPtr ColumnSparse::cloneResized(size_t new_size) const

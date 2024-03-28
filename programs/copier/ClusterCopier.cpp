@@ -1649,6 +1649,7 @@ TaskStatus ClusterCopier::processPartitionPieceTaskImpl(
                     break;
                 }
                 pushing_executor.push(data);
+                LOG_WARNING(log, "wuchang Structure in processPartitionPieceTaskImpl is {} ", data.dumpStructure());
                 update_stats(data);
             }
 

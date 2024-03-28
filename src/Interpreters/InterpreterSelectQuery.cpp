@@ -778,6 +778,7 @@ InterpreterSelectQuery::InterpreterSelectQuery(
 
         /// Calculate structure of the result.
         result_header = getSampleBlockImpl();
+        LOG_WARNING(log, "When building query plan, the header is {}", result_header.dumpStructure());
     };
 
     analyze(shouldMoveToPrewhere());
@@ -969,6 +970,7 @@ void InterpreterSelectQuery::buildQueryPlan(QueryPlan & query_plan)
     /// TODO: add special stage for InterpreterSelectQuery?
     if (!options.is_projection_query && !blocksHaveEqualStructure(query_plan.getCurrentDataStream().header, result_header))
     {
+        LOG_WARNING(log, "wuchang When building query plan, the header is {}", query_plan.getCurrentDataStream().header.dumpStructure(), result_header.dumpStructure());
         auto convert_actions_dag = ActionsDAG::makeConvertingActions(
             query_plan.getCurrentDataStream().header.getColumnsWithTypeAndName(),
             result_header.getColumnsWithTypeAndName(),
