@@ -223,8 +223,8 @@ void ReplicatedMergeTreeQueue::createLogEntriesToFetchBrokenParts()
 
 void ReplicatedMergeTreeQueue::insertUnlocked(
     const LogEntryPtr & entry, std::optional<time_t> & min_unprocessed_insert_time_changed,
-    std::lock_guard<std::mutex> & state_lock)
-{
+    std::lock_guard<std::mutex> & )
+{state_lock
     auto entry_virtual_parts = entry->getVirtualPartNames(format_version);
 
     LOG_TRACE(log, "Insert entry {} to queue with type {}", entry->znode_name, entry->getDescriptionForLogs(format_version));
@@ -2198,10 +2198,11 @@ CommittingBlocks BaseMergePredicate<VirtualPartsT, MutationsStateT>::getCommitti
     return committing_blocks;
 }
 
+// 父类是 BaseMergePredicate
 ReplicatedMergeTreeMergePredicate::ReplicatedMergeTreeMergePredicate(
     ReplicatedMergeTreeQueue & queue_, zkutil::ZooKeeperPtr & zookeeper, std::optional<PartitionIdsHint> && partition_ids_hint_)
-    : BaseMergePredicate<ActiveDataPartSet, ReplicatedMergeTreeQueue>(std::move(partition_ids_hint_))
-    , queue(queue_)
+    : BaseMergePredicate<ActiveDataPartSet, ReplicatedMergeTreeQueue>(std::move(partition_ids_hint_)) // partition_ids_hint_构造父类对象 BaseMergePredicate
+    , queue(queue_) // 当前的ReplicatedMergeTreeQueue对象
 {
     {
         std::lock_guard lock(queue.state_mutex);
@@ -2245,6 +2246,11 @@ ReplicatedMergeTreeMergePredicate::ReplicatedMergeTreeMergePredicate(
     virtual_parts_mutex = &queue.state_mutex;
 }
 
+/**
+ * 子类有 ReplicatedMergeTreeMergePredicate 和LocalMergePredicate
+ * 实际上调用的是具体实现类的 ReplicatedMergeTreeMergePredicate::canMergeTwoParts()
+ * 和 ReplicatedMergeTreeMergePredicate::canMergeSinglePart()
+ */
 template<typename VirtualPartsT, typename MutationsStateT>
 bool BaseMergePredicate<VirtualPartsT, MutationsStateT>::operator()(
     const MergeTreeData::DataPartPtr & left,
@@ -2253,8 +2259,10 @@ bool BaseMergePredicate<VirtualPartsT, MutationsStateT>::operator()(
     String & out_reason) const
 {
     if (left)
+        //  BaseMergePredicate<VirtualPartsT, MutationsStateT>::canMergeTwoParts
         return canMergeTwoParts(left, right, out_reason);
     else
+        // bool BaseMergePredicate<VirtualPartsT, MutationsStateT>::canMergeSinglePart
         return canMergeSinglePart(right, out_reason);
 }
 

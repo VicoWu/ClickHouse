@@ -3488,6 +3488,8 @@ ReplicatedMergeTreeQueue::SelectedEntryPtr StorageReplicatedMergeTree::selectQue
 
     try
     {
+        // 从队列中选择一个merge的entry ， 搜索 ReplicatedMergeTreeQueue queue查看queue神功
+        // 搜索 ReplicatedMergeTreeQueue::selectEntryToProcess 查看方法细节
         selected = queue.selectEntryToProcess(merger_mutator, *this);
     }
     catch (...)
@@ -3543,6 +3545,9 @@ bool StorageReplicatedMergeTree::processQueueEntry(ReplicatedMergeTreeQueue::Sel
     });
 }
 
+/**
+ * 调用者搜索 void BackgroundJobsAssignee::threadFunc()
+ */
 bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assignee)
 {
     cleanup_thread.wakeupEarlierIfNeeded();
@@ -3641,7 +3646,7 @@ bool StorageReplicatedMergeTree::partIsAssignedToBackgroundOperation(const DataP
 
 void StorageReplicatedMergeTree::mergeSelectingTask()
 {
-    if (!is_leader)
+    if (!is_leader) // 只有leader节点才会调度，如果不是leader则直接返回
         return;
 
     const auto storage_settings_ptr = getSettings();
@@ -3670,10 +3675,10 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         /// If many merges is already queued, then will queue only small enough merges.
         /// Otherwise merge queue could be filled with only large merges,
         /// and in the same time, many small parts could be created and won't be merged.
-
+        // 检查当前是否可以执行新的后台任务，如果队列中的合并任务数量已经达到上限，则返回 AttemptStatus::Limited，表示任务受限。
         auto merges_and_mutations_queued = queue.countMergesAndPartMutations();
         size_t merges_and_mutations_sum = merges_and_mutations_queued.merges + merges_and_mutations_queued.mutations;
-        if (!canEnqueueBackgroundTask())
+        if (!canEnqueueBackgroundTask()) // 查看内存是否超过限制
         {
             LOG_TRACE(log, "Reached memory limit for the background tasks ({}), so won't select new parts to merge or mutate."
                 "Current background tasks memory usage: {}.",
@@ -3682,7 +3687,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
             return AttemptStatus::Limited;
         }
 
-        if (merges_and_mutations_sum >= storage_settings_ptr->max_replicated_merges_in_queue)
+        if (merges_and_mutations_sum >= storage_settings_ptr->max_replicated_merges_in_queue) // 数量是否超过限制
         {
             LOG_TRACE(log, "Number of queued merges ({}) and part mutations ({})"
                 " is greater than max_replicated_merges_in_queue ({}), so won't select new parts to merge or mutate.",
@@ -3706,19 +3711,21 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
 
         bool can_assign_merge = max_source_parts_size_for_merge > 0;
         PartitionIdsHint partitions_to_merge_in;
-        if (can_assign_merge)
+        if (can_assign_merge) // 可以merge
         {
-            auto lightweight_merge_pred = LocalMergePredicate(queue);
-            partitions_to_merge_in = merger_mutator.getPartitionsThatMayBeMerged(
+            auto lightweight_merge_pred = LocalMergePredicate(queue); // 创建 LocalMergePredicate 对象，判断哪些数据分区可以被合并
+            partitions_to_merge_in = merger_mutator.getPartitionsThatMayBeMerged( // 快速获取可能被合并的分区列表
                 max_source_parts_size_for_merge, lightweight_merge_pred, merge_with_ttl_allowed, NO_TRANSACTION_PTR);
-            if (partitions_to_merge_in.empty())
-                can_assign_merge = false;
+            if (partitions_to_merge_in.empty()) // 列表为空
+                can_assign_merge = false; // 重新设置can_assign_merge = false，不会进行merge操作
             else
-                merge_pred.emplace(queue.getMergePredicate(zookeeper, partitions_to_merge_in));
+                merge_pred.emplace(queue.getMergePredicate(zookeeper, partitions_to_merge_in)); // 构造一个merge_pred对象，搜索 ReplicatedMergeTreeQueue::getMergePredicate
         }
 
         String out_reason;
+        // 尝试选取符合条件的部分进行合并，如果成功创建了合并任务日志条目，则返回 AttemptStatus::EntryCreated。
         if (can_assign_merge &&
+            // 搜索 MergeTreeDataMergerMutator::selectPartsToMerge
             merger_mutator.selectPartsToMerge(future_merged_part, false, max_source_parts_size_for_merge, *merge_pred,
                 merge_with_ttl_allowed, NO_TRANSACTION_PTR, out_reason, &partitions_to_merge_in) == SelectPartsDecision::SELECTED)
         {
@@ -3741,12 +3748,12 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
             if (create_result == CreateMergeEntryResult::LogUpdated)
                 return AttemptStatus::NeedRetry;
         }
-
+        // 可以看到，如果本轮可以merge，就不会进行mutation
         /// If there are many mutations in queue, it may happen, that we cannot enqueue enough merges to merge all new parts
         if (max_source_part_size_for_mutation == 0 || merges_and_mutations_queued.mutations >= storage_settings_ptr->max_replicated_mutations_in_queue)
             return AttemptStatus::Limited;
 
-        if (queue.countMutations() > 0)
+        if (queue.countMutations() > 0) // 如果的确有mutation的任务
         {
             /// We don't need the list of committing blocks to choose a part to mutate
             if (!merge_pred)
@@ -3754,7 +3761,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
 
             /// Choose a part to mutate.
             DataPartsVector data_parts = getDataPartsVectorForInternalUsage();
-            for (const auto & part : data_parts)
+            for (const auto & part : data_parts) // 每次只是修改一个part
             {
                 if (part->getBytesOnDisk() > max_source_part_size_for_mutation)
                     continue;
@@ -3763,7 +3770,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                 if (!desired_mutation_version)
                     continue;
 
-                create_result = createLogEntryToMutatePart(
+                create_result = createLogEntryToMutatePart( // 创建mutate任务
                     *part,
                     future_merged_part->uuid,
                     desired_mutation_version->first,

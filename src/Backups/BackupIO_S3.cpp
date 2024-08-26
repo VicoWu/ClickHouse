@@ -262,6 +262,7 @@ void BackupWriterS3::copyFileFromDisk(const String & path_in_backup, DiskPtr src
     BackupWriterDefault::copyFileFromDisk(path_in_backup, src_disk, src_path, copy_encrypted, start_pos, length);
 }
 
+// copy from from s3 to s3
 void BackupWriterS3::copyFile(const String & destination, const String & source, size_t size)
 {
     LOG_TRACE(log, "Copying file inside backup from {} to {} ", source, destination);

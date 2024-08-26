@@ -129,16 +129,22 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
     return 0;
 }
 
+/**
+ * 调用者 torageReplicatedMergeTree::mergeSelectingTask
+
+ * @return
+ */
 SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
     FutureMergedMutatedPartPtr future_part,
     bool aggressive,
     size_t max_total_size_to_merge,
-    const AllowedMergingPredicate & can_merge_callback,
+    const AllowedMergingPredicate & can_merge_callback, // 搜索 using AllowedMergingPredicate查看 AllowedMergingPredicate
     bool merge_with_ttl_allowed,
     const MergeTreeTransactionPtr & txn,
     String & out_disable_reason,
     const PartitionIdsHint * partitions_hint)
 {
+    // 第一步，获取可以用于合并的数据部分
     MergeTreeData::DataPartsVector data_parts = getDataPartsToSelectMergeFrom(txn, partitions_hint);
 
     auto metadata_snapshot = data.getInMemoryMetadataPtr();
@@ -149,6 +155,7 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
         return SelectPartsDecision::CANNOT_SELECT;
     }
 
+    // 第二步，检查哪些部分可能满足合并的前提条件 搜索 MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPossibleMergeRanges(
     MergeSelectingInfo info = getPossibleMergeRanges(data_parts, can_merge_callback, txn, out_disable_reason);
 
     if (info.parts_selected_precondition == 0)
@@ -157,15 +164,18 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
         return SelectPartsDecision::CANNOT_SELECT;
     }
 
+    //  第三部，选择要合并的part，调用查看 MergeTreeDataMergerMutator::selectPartsToMergeFromRanges
     auto res = selectPartsToMergeFromRanges(future_part, aggressive, max_total_size_to_merge, merge_with_ttl_allowed,
                                             metadata_snapshot, info.parts_ranges, info.current_time, out_disable_reason);
 
-    if (res == SelectPartsDecision::SELECTED)
+    if (res == SelectPartsDecision::SELECTED) // 选好了，直接返回
         return res;
 
+    // 选择一个最适合进行优化的partition
     String best_partition_id_to_optimize = getBestPartitionToOptimizeEntire(info.partitions_info);
-    if (!best_partition_id_to_optimize.empty())
+    if (!best_partition_id_to_optimize.empty()) // 如果没有找到合适的分区
     {
+        // 最佳分区内的所有部分进行优化合并。
         return selectAllPartsToMergeWithinPartition(
             future_part,
             can_merge_callback,
@@ -183,6 +193,15 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
     return SelectPartsDecision::CANNOT_SELECT;
 }
 
+/**
+ * 快速确认有哪些partition需要merge
+ * 调用者是void StorageReplicatedMergeTree::mergeSelectingTask()
+ * @param max_total_size_to_merge
+ * @param can_merge_callback
+ * @param merge_with_ttl_allowed
+ * @param txn
+ * @return
+ */
 MergeTreeDataMergerMutator::PartitionIdsHint MergeTreeDataMergerMutator::getPartitionsThatMayBeMerged(
     size_t max_total_size_to_merge,
     const AllowedMergingPredicate & can_merge_callback,
@@ -327,9 +346,20 @@ MergeTreeData::DataPartsVector MergeTreeDataMergerMutator::getDataPartsToSelectM
     return data_parts;
 }
 
+/**
+ * using AllowedMergingPredicate = std::function<bool (const MergeTreeData::DataPartPtr &,
+    const MergeTreeData::DataPartPtr &,
+    const MergeTreeTransaction *,
+    String &)>;
+ * @param data_parts
+ * @param can_merge_callback
+ * @param txn
+ * @param out_disable_reason
+ * @return
+ */
 MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPossibleMergeRanges(
     const MergeTreeData::DataPartsVector & data_parts,
-    const AllowedMergingPredicate & can_merge_callback,
+    const AllowedMergingPredicate & can_merge_callback, //  bool BaseMergePredicate<VirtualPartsT, MutationsStateT>::operator()(
     const MergeTreeTransactionPtr & txn,
     String & out_disable_reason) const
 {
@@ -350,23 +380,24 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
 
     /// collect min_age for each partition while iterating parts
     PartitionsInfo & partitions_info = res.partitions_info;
-
-    for (const MergeTreeData::DataPartPtr & part : data_parts)
+    // using DataPartPtr = std::shared_ptr<const DataPart>;
+    // using DataPart = IMergeTreeDataPart;
+    for (const MergeTreeData::DataPartPtr & part : data_parts) // 遍历每一个
     {
         const String & partition_id = part->info.partition_id;
 
-        if (!prev_partition_id || partition_id != *prev_partition_id)
+        if (!prev_partition_id || partition_id != *prev_partition_id) // 确定是否需要开始一个新的分区区间。如果分区 ID 发生变化，或当前区间为空，则开始新的区间。
         {
-            if (parts_ranges.empty() || !parts_ranges.back().empty())
+            if (parts_ranges.empty() || !parts_ranges.back().empty()) // 如果整个区间为空，或者整个区间不为空且最后一个区间也不为空，需要创建一个
                 parts_ranges.emplace_back();
 
             /// New partition frame.
             prev_partition_id = &partition_id;
-            prev_part = nullptr;
+            prev_part = nullptr; // 由于开始了一个新的partition，那么prev_part为空，代表这个part是当前partition的第一个part
         }
 
         /// Check predicate only for the first part in each range.
-        if (!prev_part)
+        if (!prev_part) // 如果这是当前partition的第一个part
         {
             /* Parts can be merged with themselves for TTL needs for example.
             * So we have to check if this part is currently being inserted with quorum and so on and so forth.
@@ -377,15 +408,15 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
 
             /// This part can be merged only with next parts (no prev part exists), so start
             /// new interval if previous was not empty.
-            if (!parts_ranges.back().empty())
-                parts_ranges.emplace_back();
+            if (!parts_ranges.back().empty()) //  parts_ranges 中最后一个区间是否为空。如果该区间不为空，说明已有部分数据被添加到这个区间中。
+                parts_ranges.emplace_back(); // 如果最后一个区间不为空，使用 emplace_back() 向 parts_ranges 添加一个新的空区间
         }
-        else
+        else // 这不是当前partition的第一个part
         {
             /// If we cannot merge with previous part we had to start new parts
             /// interval (in the same partition)
             if (!can_merge_callback(*prev_part, part, txn.get(), out_disable_reason))
-            {
+            {  // 我们不能与前一个part合并，因此我们需要开启一个新的part interval
                 /// Now we have no previous part
                 prev_part = nullptr;
 
@@ -397,10 +428,10 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
                 /// and so on.
                 /// Also we don't start new interval here (maybe all next parts cannot be merged and we don't want to have empty interval)
                 if (!can_merge_callback(nullptr, part, txn.get(), out_disable_reason))
-                    continue;
-
+                    continue; // 检查当前部分是否可以单独合并（即不与前一个部分合并）。如果不能单独合并，则跳过当前循环的剩余部分，不处理这个part
+                // 执行到这里，意味着这个part不能与前面的part合并，但是可以与自己和后续的部分合并
                 /// Starting new interval in the same partition
-                parts_ranges.emplace_back();
+                parts_ranges.emplace_back();// 在partition内部开始一个新的interval
             }
         }
 
@@ -418,10 +449,10 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
 
         ++res.parts_selected_precondition;
 
-        parts_ranges.back().emplace_back(part_info);
+        parts_ranges.back().emplace_back(part_info); //往结果中插入数据
 
         /// Check for consistency of data parts. If assertion is failed, it requires immediate investigation.
-        if (prev_part)
+        if (prev_part) // 如果prev_part不为空，那么检查两个part之间是否是交集或者包含关系，如果有交集或者包含关系都不行
         {
             if (part->info.contains((*prev_part)->info))
                 throw Exception(ErrorCodes::LOGICAL_ERROR, "Part {} contains previous part {}", part->name, (*prev_part)->name);
@@ -436,6 +467,19 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
     return res;
 }
 
+/**
+ * 调用者 MergeTreeDataMergerMutator::selectPartsToMerge
+ * @param future_part
+ * @param aggressive
+ * @param max_total_size_to_merge
+ * @param merge_with_ttl_allowed
+ * @param metadata_snapshot
+ * @param parts_ranges
+ * @param current_time
+ * @param out_disable_reason
+ * @param dry_run
+ * @return
+ */
 SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
     FutureMergedMutatedPartPtr future_part,
     bool aggressive,

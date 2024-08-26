@@ -466,6 +466,8 @@ Number of threads receiving data from network. Only ClickHouse-related network i
 Number of threads sending data to network. Only ClickHouse-related network interaction is included, not by 3rd party libraries.
 
 ### OpenFileForRead
+ClickHouseMetrics_NetworkReceive{cluster="OLAP-AA-Clickhouse", instance=~"$instance"}
+ClickHouseMetrics_NetworkSend{cluster="OLAP-AA-Clickhouse", instance=~"$instance"}
 
 Number of files open for reading
 
@@ -585,6 +587,9 @@ The current number of callback requests in flight from the remote server back to
 
 Number of Replicated tables that are currently in readonly state due to re-initialization after ZooKeeper session loss or due to startup without ZooKeeper configured.
 
+ClickHouseMetrics_ReplicatedFetch{cluster="OLAP-AA-Clickhouse", instance=~"$instance"}
+ClickHouseMetrics_ReplicatedSend{cluster="OLAP-AA-Clickhouse", instance=~"$instance"}
+
 ### RemoteRead
 
 Number of read with remote reader in fly
@@ -681,7 +686,10 @@ Number of connections to TCP server (clients with native interface), also includ
 
 Number of dropped tables, that are waiting for background data removal.
 
+ClickHouseMetrics_TemporaryFilesUnknown{cluster="OLAP-AA-Clickhouse", instance=~"$instance"}
+
 ### TemporaryFilesForAggregation
+
 
 Number of temporary files created for external aggregation
 

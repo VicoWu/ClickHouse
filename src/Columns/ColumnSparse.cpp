@@ -28,8 +28,12 @@ ColumnSparse::ColumnSparse(MutableColumnPtr && values_)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Not empty values passed to ColumnSparse, but no offsets passed");
 
     values->insertDefault();
-    offsets = ColumnUInt64::create();
-    LOG_WARNING(&Poco::Logger::get("abd"), "Constructing a sparse column {}, name is {}", to_string(boost::stacktrace::stacktrace()), ColumnSparse::getName());
+    30
+        offsets = ColumnUInt64::create();
+    LOG_WARNING(&Poco::Logger::get("abd"), "Constructing a sparse column name {}, offset column name is {},{}",
+                ColumnSparse::getName(),
+                ColumnSparse::getOffsetsColumn().getName(),
+                ColumnSparse::getOffsetsPtr()->getName());
 }
 
 ColumnSparse::ColumnSparse(MutableColumnPtr && values_, MutableColumnPtr && offsets_, size_t size_)

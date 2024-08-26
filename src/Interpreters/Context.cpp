@@ -2951,8 +2951,8 @@ ThrottlerPtr Context::getRemoteReadThrottler() const
 
 ThrottlerPtr Context::getRemoteWriteThrottler() const
 {
-    ThrottlerPtr throttler = shared->remote_write_throttler;
-    if (auto bandwidth = getSettingsRef().max_remote_write_network_bandwidth)
+    ThrottlerPtr throttler = shared->remote_write_throttler; // server side bandwidth control max_remote_write_network_bandwidth_for_server
+    if (auto bandwidth = getSettingsRef().max_remote_write_network_bandwidth) // user profile level bandwidth control
     {
         std::lock_guard lock(mutex);
         if (!remote_write_query_throttler)
@@ -2990,8 +2990,8 @@ ThrottlerPtr Context::getLocalWriteThrottler() const
 
 ThrottlerPtr Context::getBackupsThrottler() const
 {
-    ThrottlerPtr throttler = shared->backups_server_throttler;
-    if (auto bandwidth = getSettingsRef().max_backup_bandwidth)
+    ThrottlerPtr throttler = shared->backups_server_throttler; // server side bandwidth throttler max_backup_bandwidth_for_server
+    if (auto bandwidth = getSettingsRef().max_backup_bandwidth) // user profile bandwidth throttler max_backup_bandwidth
     {
         std::lock_guard lock(mutex);
         if (!backups_query_throttler)

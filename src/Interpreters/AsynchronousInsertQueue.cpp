@@ -199,7 +199,8 @@ AsynchronousInsertQueue::~AsynchronousInsertQueue()
         dump_by_first_update_threads[i].join();
 
         if (flush_on_shutdown)
-        {
+        {   // 关闭AsynchronousInsertQueue的时候，触发数据的processing
+            // 这是 AsynchronousInsertQueue::scheduleDataProcessingJob
             for (auto & [_, elem] : shard.queue)
                 scheduleDataProcessingJob(elem.key, std::move(elem.data), getContext());
         }
@@ -362,6 +363,7 @@ AsynchronousInsertQueue::pushDataChunk(ASTPtr query, DataChunk chunk, ContextPtr
     }
 
     if (data_to_process)
+        // 这是 AsynchronousInsertQueue::scheduleDataProcessingJob
         scheduleDataProcessingJob(key, std::move(data_to_process), getContext());
     else
         shard.are_tasks_available.notify_one();
@@ -402,6 +404,7 @@ void AsynchronousInsertQueue::flushAll()
         {
             total_bytes += entry.data->size_in_bytes;
             total_entries += entry.data->entries.size();
+            // 这是 AsynchronousInsertQueue::scheduleDataProcessingJob
             scheduleDataProcessingJob(entry.key, std::move(entry.data), getContext());
         }
     }
@@ -463,6 +466,7 @@ void AsynchronousInsertQueue::processBatchDeadlines(size_t shard_num)
         }
 
         for (auto & entry : entries_to_flush)
+            // 这是 AsynchronousInsertQueue::scheduleDataProcessingJob
             scheduleDataProcessingJob(entry.key, std::move(entry.data), getContext());
     }
 }

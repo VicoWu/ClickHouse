@@ -178,7 +178,7 @@ namespace
     ReadSettings getReadSettingsForBackup(const ContextPtr & context, const BackupSettings & backup_settings)
     {
         auto read_settings = context->getReadSettings();
-        read_settings.remote_throttler = context->getBackupsThrottler();
+        read_settings.remote_throttler = context->getBackupsThrottler(); // 无论是remote还是local,读取的throttler都是使用的同一个
         read_settings.local_throttler = context->getBackupsThrottler();
         read_settings.enable_filesystem_cache = backup_settings.read_from_filesystem_cache;
         read_settings.read_from_filesystem_cache_if_exists_otherwise_bypass_cache = backup_settings.read_from_filesystem_cache;
@@ -251,7 +251,7 @@ public:
     ThreadPool & getThreadPool(ThreadPoolId thread_pool_id)
     {
         std::lock_guard lock{mutex};
-        auto it = thread_pools.find(thread_pool_id);
+        auto it = thread_pools.find(thread_pool_id); // 在threads_pools中获取对应的Thread Pool
         if (it != thread_pools.end())
             return *it->second;
 
@@ -338,7 +338,7 @@ private:
 
 
 BackupsWorker::BackupsWorker(ContextPtr global_context, size_t num_backup_threads, size_t num_restore_threads, bool allow_concurrent_backups_, bool allow_concurrent_restores_)
-    : thread_pools(std::make_unique<ThreadPools>(num_backup_threads, num_restore_threads))
+    : thread_pools(std::make_unique<ThreadPools>(num_backup_threads, num_restore_threads)) // 这是两个Thread Pool，分别对应backup和restore的threads
     , allow_concurrent_backups(allow_concurrent_backups_)
     , allow_concurrent_restores(allow_concurrent_restores_)
     , log(&Poco::Logger::get("BackupsWorker"))
@@ -416,6 +416,7 @@ OperationID BackupsWorker::startMakingBackup(const ASTPtr & query, const Context
 
         if (backup_settings.async)
         {
+            // 是否是on_cluster，决定了使用哪一个ThreadPool
             auto & thread_pool = getThreadPool(on_cluster ? ThreadPoolId::BACKUP_ASYNC_ON_CLUSTER : ThreadPoolId::BACKUP_ASYNC);
             thread_pool.scheduleOrThrowOnError(
                 [this, backup_query, backup_id, backup_name_for_logging, backup_info, backup_settings, backup_coordination, context_in_use, mutable_context]
@@ -875,6 +876,7 @@ void BackupsWorker::doRestore(
                 String addr_database = address->default_database.empty() ? current_database : address->default_database;
                 for (auto & element : restore_elements)
                     element.setCurrentDatabase(addr_database);
+                // 在这里，Backup和Restore使用的是相同的
                 RestorerFromBackup dummy_restorer{restore_elements, restore_settings, nullptr, backup, context};
                 dummy_restorer.run(RestorerFromBackup::CHECK_ACCESS_ONLY);
             }

@@ -86,7 +86,7 @@ private:
       * In ZK records in chronological order. Here they are executed in parallel and reorder after entry execution.
       * Order of execution is not "queue" at all. Look at selectEntryToProcess.
       */
-    Queue queue;
+    Queue queue; // using Queue = std::list<LogEntryPtr>;
 
     InsertsByTime inserts_by_time;
     std::atomic<time_t> min_unprocessed_insert_time = 0;
@@ -502,6 +502,7 @@ public:
     BaseMergePredicate(std::optional<PartitionIdsHint> && partition_ids_hint_) : partition_ids_hint(std::move(partition_ids_hint_)) {}
 
     /// Depending on the existence of left part checks a merge predicate for two parts or for single part.
+    // 实现搜索 bool BaseMergePredicate<VirtualPartsT, MutationsStateT>::operator()(
     bool operator()(const MergeTreeData::DataPartPtr & left,
                     const MergeTreeData::DataPartPtr & right,
                     const MergeTreeTransaction * txn,

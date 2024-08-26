@@ -40,6 +40,19 @@ enum class ExecuteTTLType
 class MergeTreeDataMergerMutator
 {
 public:
+    /**
+    std::function：C++ 标准库中的模板类，用来表示任意类型的可调用对象，如普通函数、lambda 表达式、函数对象等。它的模板参数定义了函数对象的返回类型和参数类型。
+
+    bool：函数对象的返回类型是 bool，表示函数的结果是一个布尔值（true 或 false）。
+
+        const MergeTreeData::DataPartPtr &：这是函数对象的第一个和第二个参数类型，它们都是 const 引用类型，指向 MergeTreeData::DataPartPtr 对象。DataPartPtr 很可能是一个智能指针类型，指向 MergeTreeData 的某个部分。
+
+        const MergeTreeTransaction *：函数对象的第三个参数类型是一个指向 MergeTreeTransaction 对象的指针。
+
+            String &：函数对象的第四个参数类型是一个引用类型，指向 String 对象。这个参数可能用于在函数执行时存储某些输出信息（例如：无法合并的原因）。
+
+
+                */
     using AllowedMergingPredicate = std::function<bool (const MergeTreeData::DataPartPtr &,
                                                         const MergeTreeData::DataPartPtr &,
                                                         const MergeTreeTransaction *,

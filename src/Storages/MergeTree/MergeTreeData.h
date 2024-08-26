@@ -1191,6 +1191,14 @@ protected:
     /// Another explanation is that moving operations are common for Replicated and Plain MergeTree classes.
     /// Task that schedules this operations is executed with its own timetable and triggered in a specific places in code.
     /// And for ReplicatedMergeTree we don't have LogEntry type for this operation.
+    /**
+     * background_operations_assignee：
+          这个执行器负责调度和管理一般的后台操作，例如数据的合并（merge）、变异（mutation）等。这些操作是 MergeTree 和 ReplicatedMergeTree 存储引擎的核心功能，涉及到数据的一致性和完整性。
+       background_moves_assignee：
+          这个执行器专门用于管理数据移动操作。数据移动通常是指将数据部分（parts）从一个位置移动到另一个位置，例如从一个磁盘移动到另一个磁盘，或者是将数据从一个存储层移动到另一个存储层。
+          这类操作在 MergeTree 和 ReplicatedMergeTree 中是通用的，独立于数据的合并和变异操作。
+          在MergeTreeData::MergeTreeData构造方法中构造了BackgroundJobsAssignee。如果是replicatedMergeTree，那么就是 StorageReplicatedMergeTree
+     */
     BackgroundJobsAssignee background_operations_assignee;
     BackgroundJobsAssignee background_moves_assignee;
 

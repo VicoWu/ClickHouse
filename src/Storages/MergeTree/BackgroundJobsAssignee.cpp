@@ -129,7 +129,8 @@ try
     switch (type)
     {
         case Type::DataProcessing:
-            succeed = data.scheduleDataProcessingJob(*this);
+            // data的实例是 StorageReplicatedMergeTree
+            succeed = data.scheduleDataProcessingJob(*this); // 搜索 StorageReplicatedMergeTree::scheduleDataProcessingJob
             break;
         case Type::Moving:
             succeed = data.scheduleDataMovingJob(*this);
@@ -137,7 +138,7 @@ try
     }
 
     if (!succeed)
-        postpone();
+        postpone(); // 如果失败需要postpone，如果成功则不postpone
 }
 catch (...) /// Catch any exception to avoid thread termination.
 {
