@@ -1063,7 +1063,7 @@ std::pair<std::vector<String>, bool> ReplicatedMergeTreeSinkImpl<async_insert>::
 
     if (retry_context.stage == CommitRetryContext::SUCCESS)
     {
-        storage.merge_selecting_task->schedule();
+        storage.merge_selecting_task->schedule(); // BackgroundSchedulePoolTaskInfo::schedule()
 
         if (isQuorumEnabled())
         {

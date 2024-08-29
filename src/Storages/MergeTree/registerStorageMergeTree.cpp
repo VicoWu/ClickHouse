@@ -248,7 +248,7 @@ static StoragePtr create(const StorageFactory::Arguments & args)
     ASTs & engine_args = args.engine_args;
     auto context = args.getContext();
     size_t arg_num = 0;
-    size_t arg_cnt = engine_args.size();
+    size_t arg_cnt = engine_args.size(); // 整个arg的数量
 
     if (arg_cnt < min_num_params || arg_cnt > max_num_params)
     {
@@ -377,10 +377,10 @@ static StoragePtr create(const StorageFactory::Arguments & args)
 
         if (has_valid_arguments)
         {
-            /// Get path and name from engine arguments
+            /// 从engine的参数中获取zookeeper的路径
             ast_zk_path = engine_args[arg_num]->as<ASTLiteral>();
             if (ast_zk_path && ast_zk_path->value.getType() == Field::Types::String)
-                zookeeper_path = ast_zk_path->value.safeGet<String>();
+                zookeeper_path = ast_zk_path->value.safeGet<String>(); // 设置zookeeper的path
             else
                 throw Exception(ErrorCodes::BAD_ARGUMENTS, "Path in ZooKeeper must be a string literal{}", verbose_help_message);
             ++arg_num;

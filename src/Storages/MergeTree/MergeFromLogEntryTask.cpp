@@ -23,10 +23,19 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
 }
 
+/**
+ * 从继承关系可以看到 MergeFromLogEntryTask -> ReplicatedMergeMutateTaskBase ->  IExecutableTask
+ * task的执行实际上是执行 ReplicatedMergeMutateTaskBase::executeImpl()
+ * 即，先执行prepare，在prepare的时候会构造对应的merge_task，然后执行 merge_task->execute(); , 最后执行finalize()
+ * ReplicatedMergeMutateTaskBase::executeImpl()
+ * @param selected_entry_
+ * @param storage_
+ * @param task_result_callback_
+ */
 MergeFromLogEntryTask::MergeFromLogEntryTask(
     ReplicatedMergeTreeQueue::SelectedEntryPtr selected_entry_,
     StorageReplicatedMergeTree & storage_,
-    IExecutableTask::TaskResultCallback & task_result_callback_)
+    IExecutableTask::TaskResultCallback & task_result_callback_) // 这个callback是 common_assignee_trigger = [this] (bool delay) noexcept
     : ReplicatedMergeMutateTaskBase(
         &Poco::Logger::get(
             storage_.getStorageID().getShortName() + "::" + selected_entry_->log_entry->new_part_name + " (MergeFromLogEntryTask)"),
@@ -404,7 +413,7 @@ bool MergeFromLogEntryTask::finalize(ReplicatedMergeMutateTaskBase::PartLogWrite
     /** With `ZSESSIONEXPIRED` or `ZOPERATIONTIMEOUT`, we can inadvertently roll back local changes to the parts.
      * This is not a problem, because in this case the merge will remain in the queue, and we will try again.
      */
-    finish_callback = [storage_ptr = &storage]() { storage_ptr->merge_selecting_task->schedule(); };
+    finish_callback = [storage_ptr = &storage]() { storage_ptr->merge_selecting_task->schedule(); }; // BackgroundSchedulePoolTaskInfo::schedule()
     ProfileEvents::increment(ProfileEvents::ReplicatedPartMerges);
 
     write_part_log({});

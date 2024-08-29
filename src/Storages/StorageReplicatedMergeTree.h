@@ -88,6 +88,25 @@ namespace DB
   * as the time will take the time of creation the appropriate part on any of the replicas.
   */
 
+/**
+ * 所有副本共享一个公共日志（/log/log-...），日志记录了需要执行的操作的顺序（LogEntry）。
+        日志条目包括：
+        数据插入（GET）
+        从本地数据附加插入（ATTACH）
+        数据合并（MERGE）
+        删除分区（DROP）
+
+    日志条目的处理:
+        每个副本从公共日志中复制条目到其队列（/replicas/replica_name/queue/queue-...）并执行这些操作（queueTask）。
+                执行可以按需重新排序（shouldExecuteLogEntry, executeLogEntry）。
+    队列中的条目:
+        日志生成:副本可以独立生成日志条目，如在创建新副本时从其他副本中获取数据（createReplica）；如果部分数据损坏或缺失，则从其他副本获取数据（removePartAndEnqueueFetch）。
+        插入操作: 执行插入操作的副本队列中也会有一个对应的 GET 操作条目，该条目会在队列处理程序看到时被视为已执行。
+    时间戳:
+        每个日志条目都有一个创建时间，由创建该条目的服务器生成，即发出对应 INSERT 或 ALTER 查询的服务器。
+        对于副本自己生成的条目，时间戳使用在任何副本上创建相应部分的时间。
+
+ */
 class ZooKeeperWithFaultInjection;
 using ZooKeeperWithFaultInjectionPtr = std::shared_ptr<ZooKeeperWithFaultInjection>;
 

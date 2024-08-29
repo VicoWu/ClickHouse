@@ -295,7 +295,7 @@ StorageReplicatedMergeTree::StorageReplicatedMergeTree(
     const StorageID & table_id_,
     const String & relative_data_path_,
     const StorageInMemoryMetadata & metadata_,
-    ContextMutablePtr context_,
+    ContextMutablePtr context_,mak
     const String & date_column_name,
     const MergingParams & merging_params_,
     std::unique_ptr<MergeTreeSettings> settings_,
@@ -317,7 +317,7 @@ StorageReplicatedMergeTree::StorageReplicatedMergeTree(
     , replica_path(fs::path(zookeeper_path) / "replicas" / replica_name_)
     , reader(*this)
     , writer(*this)
-    , merger_mutator(*this)
+    , merger_mutator(*this) // 构造 MergeTreeDataMergerMutator
     , merge_strategy_picker(*this)
     , queue(*this, merge_strategy_picker)
     , fetcher(*this)
@@ -333,7 +333,9 @@ StorageReplicatedMergeTree::StorageReplicatedMergeTree(
     initializeDirectoriesAndFormatVersion(relative_data_path_, attach, date_column_name);
     /// We create and deactivate all tasks for consistency.
     /// They all will be scheduled and activated by the restarting thread.
-    queue_updating_task = getContext()->getSchedulePool().createTask(
+    // BackgroundSchedulePool::TaskHolder BackgroundSchedulePool::createTask()
+    // 这里会监控 logs目录设置回调，一旦log目录发生变化，则反复调用 queueUpdatingTask()
+    queue_updating_task = getContext()->getSchedulePool().createTask( //这个task的任务就是当log目录有变化的时候反复调用pullLogsToQueue()方法
         getStorageID().getFullTableName() + " (StorageReplicatedMergeTree::queueUpdatingTask)", [this]{ queueUpdatingTask(); });
 
     queue_updating_task->deactivate();
@@ -342,9 +344,10 @@ StorageReplicatedMergeTree::StorageReplicatedMergeTree(
         getStorageID().getFullTableName() + " (StorageReplicatedMergeTree::mutationsUpdatingTask)", [this]{ mutationsUpdatingTask(); });
 
     mutations_updating_task->deactivate();
-
+    // 这个callback就是 mutations_updating_task->getWatchCallback()
     mutations_watch_callback = std::make_shared<Coordination::WatchCallback>(mutations_updating_task->getWatchCallback());
-
+    // BackgroundSchedulePool::TaskHolder BackgroundSchedulePool::createTask
+    // mergeSelectingTask() 只有leader才会执行
     merge_selecting_task = getContext()->getSchedulePool().createTask(
         getStorageID().getFullTableName() + " (StorageReplicatedMergeTree::mergeSelectingTask)", [this] { mergeSelectingTask(); });
 
@@ -866,7 +869,7 @@ bool StorageReplicatedMergeTree::createTableIfNotExists(const StorageMetadataPtr
             zkutil::CreateMode::Persistent));
         ops.emplace_back(zkutil::makeCreateRequest(replica_path + "/log_pointer", "",
             zkutil::CreateMode::Persistent));
-        ops.emplace_back(zkutil::makeCreateRequest(replica_path + "/queue", "",
+        ops.emplace_back(zkutil::makeCreateRequest(replica_patAdding mutation h + "/queue", "",
             zkutil::CreateMode::Persistent));
         ops.emplace_back(zkutil::makeCreateRequest(replica_path + "/parts", "",
             zkutil::CreateMode::Persistent));
@@ -3418,19 +3421,24 @@ String StorageReplicatedMergeTree::getLastQueueUpdateException() const
     return last_queue_update_exception;
 }
 
-
+/**
+ * 定期更新 ReplicatedMergeTree 的队列。它会尝试从 ZooKeeper 拉取日志并更新队列，更新完成以后会将自己重新设置到watch中以进行下一次的触发
+ * 搜索 queue_updating_task = getContext()->getSchedulePool().createTask(
+ */
 void StorageReplicatedMergeTree::queueUpdatingTask()
 {
-    if (!queue_update_in_progress)
+    if (!queue_update_in_progress) // : 检查是否有队列更新正在进行中。如果没有，则开始一个新的更新操作
     {
         last_queue_update_start_time.store(time(nullptr));
         queue_update_in_progress = true;
     }
     try
     {
+        // 生成基于 ReplicatedMergeTreeQueue::UPDATE 这个原因将LogEntry转移到Zookeeper Queue，设置回调，当目录有变化的时候，callback被调用。
+        // BackgroundSchedulePoolTaskInfo::getWatchCallback()，这里callback执行的就是重新调度这个queue_updating_task
         queue.pullLogsToQueue(getZooKeeperAndAssertNotReadonly(), queue_updating_task->getWatchCallback(), ReplicatedMergeTreeQueue::UPDATE);
         last_queue_update_finish_time.store(time(nullptr));
-        queue_update_in_progress = false;
+        queue_update_in_progress = false; // queue updating
     }
     catch (const Coordination::Exception & e)
     {
@@ -3463,6 +3471,7 @@ void StorageReplicatedMergeTree::mutationsUpdatingTask()
 {
     try
     {
+        // ReplicatedMergeTreeQueue::updateMutations
         queue.updateMutations(getZooKeeper(), mutations_watch_callback);
     }
     catch (const Coordination::Exception & e)
@@ -3488,7 +3497,7 @@ ReplicatedMergeTreeQueue::SelectedEntryPtr StorageReplicatedMergeTree::selectQue
 
     try
     {
-        // 从队列中选择一个merge的entry ， 搜索 ReplicatedMergeTreeQueue queue查看queue神功
+        // 从队列中选择一个merge的entry ， 搜索 ReplicatedMergeTreeQueue queue查看queue的实现
         // 搜索 ReplicatedMergeTreeQueue::selectEntryToProcess 查看方法细节
         selected = queue.selectEntryToProcess(merger_mutator, *this);
     }
@@ -3557,7 +3566,7 @@ bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssigne
         return false;
 
     /// This object will mark the element of the queue as running.
-    ReplicatedMergeTreeQueue::SelectedEntryPtr selected_entry = selectQueueEntry();
+    ReplicatedMergeTreeQueue::SelectedEntryPtr selected_entry = selectQueueEntry(); // 将会调用 selectEntryToProcess()，从 ReplicatedMergeTreeQueue::queue 中取出元素进行处理
 
     if (!selected_entry)
         return false;
@@ -3576,14 +3585,16 @@ bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssigne
     }
     else if (job_type == LogEntry::MERGE_PARTS)
     {
+        // common_assignee_trigger是对应的callback， 查看 common_assignee_trigger = [this] (bool delay) noexcept
         auto task = std::make_shared<MergeFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
-        assignee.scheduleMergeMutateTask(task);
+        assignee.scheduleMergeMutateTask(task); // MergeFromLogEntryTask， 搜搜 bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
         return true;
     }
     else if (job_type == LogEntry::MUTATE_PART)
     {
+        // common_assignee_trigger是对应的callback， 查看 common_assignee_trigger = [this] (bool delay) noexcept
         auto task = std::make_shared<MutateFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
-        assignee.scheduleMergeMutateTask(task);
+        assignee.scheduleMergeMutateTask(task);  // 搜搜 bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
         return true;
     }
     else
@@ -3644,6 +3655,9 @@ bool StorageReplicatedMergeTree::partIsAssignedToBackgroundOperation(const DataP
     return queue.isVirtualPart(part);
 }
 
+/**
+ * 选择需要进行merge的parts，并且写入到zookeeper log中。只有leader才应该执行。所以这个方法并不真正执行merge操作
+ */
 void StorageReplicatedMergeTree::mergeSelectingTask()
 {
     if (!is_leader) // 只有leader节点才会调度，如果不是leader则直接返回
@@ -3656,12 +3670,12 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
 
     enum class AttemptStatus
     {
-        EntryCreated,
-        NeedRetry,
-        Limited,
+        EntryCreated, // 在zookeeper上创建完成
+        NeedRetry, // 需要重试
+        Limited, // 额度用完受限
         CannotSelect,
     };
-
+    // 定义一个lambda 函数
     auto try_assign_merge = [&]() -> AttemptStatus
     {
         /// We must select parts for merge under merge_selecting_mutex because other threads
@@ -3686,7 +3700,10 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                 formatReadableSizeWithBinarySuffix(background_memory_tracker.get()));
             return AttemptStatus::Limited;
         }
-
+        /**
+         *     M(UInt64, max_replicated_merges_in_queue, 1000,
+         *     "How many tasks of merging and mutating parts are allowed simultaneously in ReplicatedMergeTree queue.", 0) \
+         */
         if (merges_and_mutations_sum >= storage_settings_ptr->max_replicated_merges_in_queue) // 数量是否超过限制
         {
             LOG_TRACE(log, "Number of queued merges ({}) and part mutations ({})"
@@ -3697,9 +3714,11 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
             return AttemptStatus::Limited;
         }
 
+        // 根据线程池的可用线程数量和空闲磁盘空间的数量
+        // 搜索 MergeTreeDataMergerMutator::getMaxSourcePartsSizeForMerge(size_t max_count, size_t scheduled_tasks_count) const
         UInt64 max_source_parts_size_for_merge = merger_mutator.getMaxSourcePartsSizeForMerge(
             storage_settings_ptr->max_replicated_merges_in_queue, merges_and_mutations_sum);
-
+        //
         UInt64 max_source_part_size_for_mutation = merger_mutator.getMaxSourcePartSizeForMutation();
 
         bool merge_with_ttl_allowed = merges_and_mutations_queued.merges_with_ttl < storage_settings_ptr->max_replicated_merges_with_ttl_in_queue &&
@@ -3725,11 +3744,14 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         String out_reason;
         // 尝试选取符合条件的部分进行合并，如果成功创建了合并任务日志条目，则返回 AttemptStatus::EntryCreated。
         if (can_assign_merge &&
-            // 搜索 MergeTreeDataMergerMutator::selectPartsToMerge
+            // 搜索 MergeTreeDataMergerMutator::selectPartsToMerge，这个方法分成三步，确认需要merge那些parts
             merger_mutator.selectPartsToMerge(future_merged_part, false, max_source_parts_size_for_merge, *merge_pred,
                 merge_with_ttl_allowed, NO_TRANSACTION_PTR, out_reason, &partitions_to_merge_in) == SelectPartsDecision::SELECTED)
         {
-            create_result = createLogEntryToMergeParts(
+            // 此时，future_merged_part中存放了需要进行merge 的parts信息，根据这些parts信息，创建一个LogEntry，写入到zookeeper的log下面。
+            // 方法调用完成以后，LogEntry已经创建在了zookeeper上
+            // StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::createLogEntryToMergeParts
+            create_result = createLogEntryToMergeParts( // 这个方法只会创建一个LogEntry
                 zookeeper,
                 future_merged_part->parts,
                 future_merged_part->name,
@@ -3748,16 +3770,16 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
             if (create_result == CreateMergeEntryResult::LogUpdated)
                 return AttemptStatus::NeedRetry;
         }
-        // 可以看到，如果本轮可以merge，就不会进行mutation
+        // 可以看到，如果本轮可以merge，就不会再尝试进行mutation
         /// If there are many mutations in queue, it may happen, that we cannot enqueue enough merges to merge all new parts
         if (max_source_part_size_for_mutation == 0 || merges_and_mutations_queued.mutations >= storage_settings_ptr->max_replicated_mutations_in_queue)
-            return AttemptStatus::Limited;
+            return AttemptStatus::Limited; // 次数受限，lambda返回
 
         if (queue.countMutations() > 0) // 如果的确有mutation的任务
         {
             /// We don't need the list of committing blocks to choose a part to mutate
             if (!merge_pred)
-                merge_pred.emplace(queue.getMergePredicate(zookeeper, PartitionIdsHint{}));
+                merge_pred.emplace(queue.getMergePredicate(zookeeper, PartitionIdsHint{})); // ReplicatedMergeTreeQueue::getMergePredicate
 
             /// Choose a part to mutate.
             DataPartsVector data_parts = getDataPartsVectorForInternalUsage();
@@ -3770,7 +3792,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                 if (!desired_mutation_version)
                     continue;
 
-                create_result = createLogEntryToMutatePart( // 创建mutate任务
+                create_result = createLogEntryToMutatePart( // 创建mutate任务，分发到Zookeeper的Log上
                     *part,
                     future_merged_part->uuid,
                     desired_mutation_version->first,
@@ -3778,19 +3800,19 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                     merge_pred->getVersion());
 
                 if (create_result == CreateMergeEntryResult::Ok)
-                    return AttemptStatus::EntryCreated;
+                    return AttemptStatus::EntryCreated; //创建成功，lambda 返回
                 if (create_result == CreateMergeEntryResult::LogUpdated)
-                    return AttemptStatus::NeedRetry;
+                    return AttemptStatus::NeedRetry; // 需要重试，lambda 返回
             }
         }
 
         return AttemptStatus::CannotSelect;
     };
 
-    AttemptStatus result = AttemptStatus::CannotSelect;
+    AttemptStatus result = AttemptStatus::CannotSelect; // 默认的返结果
     try
     {
-        result = try_assign_merge();
+        result = try_assign_merge(); // 执行这个lambda函数
     }
     catch (...)
     {
@@ -3812,9 +3834,11 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         merge_selecting_sleep_ms = storage_settings_ptr->max_merge_selecting_sleep_ms;
 
     if (result == AttemptStatus::EntryCreated)
-        merge_selecting_task->schedule();
+        // 无论是创建了merge还是mutation的LogEntry，都立即调度merge_selecting_task，其实还是调用该方法 mergeSelectingTask()
+        merge_selecting_task->schedule();  // BackgroundSchedulePoolTaskInfo::schedule()
     else
     {
+        // 并没有什么新的任务LogEntry，因此延迟进行调度
         LOG_TRACE(log, "Scheduling next merge selecting task after {}ms", merge_selecting_sleep_ms);
         merge_selecting_task->scheduleAfter(merge_selecting_sleep_ms);
     }
@@ -3851,6 +3875,9 @@ void StorageReplicatedMergeTree::mutationsFinalizingTask()
 }
 
 
+/**
+ * 根据传入的part，构建对应的logEntry写入到zookeeper中
+ */
 StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::createLogEntryToMergeParts(
     zkutil::ZooKeeperPtr & zookeeper,
     const DataPartsVector & parts,
@@ -3866,32 +3893,33 @@ StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::c
 {
     Strings exists_paths;
     exists_paths.reserve(parts.size());
-    for (const auto & part : parts)
+    for (const auto & part : parts) // 将所有的parts添加到 exists_paths中
         exists_paths.emplace_back(fs::path(replica_path) / "parts" / part->name);
 
-    auto exists_results = zookeeper->exists(exists_paths);
+    auto exists_results = zookeeper->exists(exists_paths); // 获取所有的存在的parts，并返回每一个part的exit返回的结果
     bool all_in_zk = true;
     for (size_t i = 0; i < parts.size(); ++i)
     {
         /// If there is no information about part in ZK, we will not merge it.
+        // 只要有一个part不在zookeeper上，就
         if (exists_results[i].error == Coordination::Error::ZNONODE)
         {
-            all_in_zk = false;
+            all_in_zk = false; // 存在一个part不在zk上，就把这个part压入到延迟检查的队列中
 
             const auto & part = parts[i];
             if (part->modification_time + MAX_AGE_OF_LOCAL_PART_THAT_WASNT_ADDED_TO_ZOOKEEPER < time(nullptr))
             {
                 LOG_WARNING(log, "Part {} (that was selected for merge) with age {} seconds exists locally but not in ZooKeeper. Won't do merge with that part and will check it.", part->name, (time(nullptr) - part->modification_time));
-                enqueuePartForCheck(part->name);
+                enqueuePartForCheck(part->name); // 进入检查队列,不糊已进行merge
             }
         }
     }
-
+    // 有任何一个part不在zk上，就返回 CreateMergeEntryResult::MissingPart
     if (!all_in_zk)
         return CreateMergeEntryResult::MissingPart;
-
+    // 所有的parts都在zookeeper上
     ReplicatedMergeTreeLogEntryData entry;
-    entry.type = LogEntry::MERGE_PARTS;
+    entry.type = LogEntry::MERGE_PARTS; // 这是一个需要进行part merge的log entry
     entry.source_replica = replica_name;
     entry.new_part_name = merged_name;
     entry.new_part_uuid = merged_part_uuid;
@@ -3903,22 +3931,23 @@ StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::c
     entry.create_time = time(nullptr);
 
     for (const auto & part : parts)
-        entry.source_parts.push_back(part->name);
+        entry.source_parts.push_back(part->name); // 将需要merge的part添加到entry的source_parts中
 
     Coordination::Requests ops;
     Coordination::Responses responses;
-
+    // 将merge任务通过zookeeper进行分发，创建对应的log任务，这些log任务会被pullLogsToQueue方法调用
     ops.emplace_back(zkutil::makeCreateRequest(
-        fs::path(zookeeper_path) / "log/log-", entry.toString(),
-        zkutil::CreateMode::PersistentSequential));
+        fs::path(zookeeper_path) / "log/log-", entry.toString(), // ReplicatedMergeTreeLogEntryData::toString()
+        zkutil::CreateMode::PersistentSequential)); // 创建一个
 
     ops.emplace_back(zkutil::makeSetRequest(
-        fs::path(zookeeper_path) / "log", "", log_version)); /// Check and update version.
+        fs::path(zookeeper_path) / "log", "", log_version)); /// 检查并更新版本号，但是数据设置为空，版本设置为log_version
 
-    Coordination::Error code = zookeeper->tryMulti(ops, responses);
+    Coordination::Error code = zookeeper->tryMulti(ops, responses); //
 
     if (code == Coordination::Error::ZOK)
     {
+        // 已经在zookeeper上创建好了merge请求
         String path_created = dynamic_cast<const Coordination::CreateResponse &>(*responses.front()).path_created;
         entry.znode_name = path_created.substr(path_created.find_last_of('/') + 1);
 
@@ -3967,7 +3996,7 @@ StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::c
     String new_part_name = part.getNewName(new_part_info);
 
     ReplicatedMergeTreeLogEntryData entry;
-    entry.type = LogEntry::MUTATE_PART;
+    entry.type = LogEntry::MUTATE_PART; // 这是一个需要mutate part的LogEntry
     entry.source_replica = replica_name;
     entry.source_parts.push_back(part.name);
     entry.new_part_name = new_part_name;
@@ -4114,9 +4143,13 @@ void StorageReplicatedMergeTree::removePartAndEnqueueFetch(const String & part_n
             /// 4) Now we get GET PART for broken part which is absent in virtual parts == bug
             ///
             /// Because of version check this method will never create FETCH if drop part exists
-
+            /**
+             * 在方法 removePartAndEnqueueFetch 中调用.
+             * 这里只是在part损坏以后，通过ReplicatedMergeTreeMergePredicate来判断是否还需要fetch
+             */
             ReplicatedMergeTreeMergePredicate merge_pred = queue.getMergePredicate(zookeeper, PartitionIdsHint{broken_part_info.partition_id});
-            if (merge_pred.isGoingToBeDropped(broken_part_info))
+            // ReplicatedMergeTreeQueue::isGoingToBeDropped
+            if (merge_pred.isGoingToBeDropped(broken_part_info)) // 检查在当前日志版本下，特定的数据部分是否会被丢弃。
             {
                 LOG_INFO(log, "Broken part {} is covered by drop range, don't need to fetch it", part_name);
                 outdate_broken_part();
@@ -4862,7 +4895,7 @@ bool StorageReplicatedMergeTree::fetchPart(
                 }
             }
 
-            merge_selecting_task->schedule();
+            merge_selecting_task->schedule(); // BackgroundSchedulePoolTaskInfo::schedule()
 
             for (const auto & replaced_part : replaced_parts)
             {
@@ -5033,6 +5066,7 @@ void StorageReplicatedMergeTree::startup()
     startupImpl(/* from_attach_thread */ false);
 }
 
+
 void StorageReplicatedMergeTree::startupImpl(bool from_attach_thread)
 {
     /// Do not start replication if ZooKeeper is not configured or there is no metadata in zookeeper
@@ -5065,7 +5099,7 @@ void StorageReplicatedMergeTree::startupImpl(bool from_attach_thread)
         startBeingLeader();
 
         /// Activate replica in a separate thread if we are not calling from attach thread
-        restarting_thread.start(/*schedule=*/!from_attach_thread);
+        restarting_thread.start(/*schedule=*/!from_attach_thread); // 启动 ReplicatedMergeTreeRestartingThread::start()
 
         if (from_attach_thread)
         {
@@ -5666,7 +5700,7 @@ bool StorageReplicatedMergeTree::optimize(
     const auto storage_settings_ptr = getSettings();
     auto metadata_snapshot = getInMemoryMetadataPtr();
     std::vector<ReplicatedMergeTreeLogEntryData> merge_entries;
-
+    // 定义了一个进行merge的lambda函数
     auto try_assign_merge = [&](const String & partition_id) -> bool
     {
         constexpr size_t max_retries = 10;
@@ -5688,6 +5722,9 @@ bool StorageReplicatedMergeTree::optimize(
                     handle_noop("Cannot select parts for optimization: there are no parts in partition {}", partition_id);
                 partition_ids_hint.insert(partition_id);
             }
+            /**
+             * 这是在方法 StorageReplicatedMergeTree::optimize 中
+             */
             ReplicatedMergeTreeMergePredicate can_merge = queue.getMergePredicate(zookeeper, std::move(partition_ids_hint));
 
             auto future_merged_part = std::make_shared<FutureMergedMutatedPart>();
@@ -5697,15 +5734,16 @@ bool StorageReplicatedMergeTree::optimize(
             constexpr const char * unknown_disable_reason = "unknown reason";
             String disable_reason = unknown_disable_reason;
             SelectPartsDecision select_decision = SelectPartsDecision::CANNOT_SELECT;
-
+            // 通过合并谓词，确定是否可以进行合并
             if (partition_id.empty())
-            {
+            {   // 在optimize()中，确定可以合并的部分
                 select_decision = merger_mutator.selectPartsToMerge(
                     future_merged_part, /* aggressive */ true, storage_settings_ptr->max_bytes_to_merge_at_max_space_in_pool,
                     can_merge, /* merge_with_ttl_allowed */ false, NO_TRANSACTION_PTR, disable_reason);
             }
             else
             {
+                // 在optimize()中，确定可以合并的部分
                 select_decision = merger_mutator.selectAllPartsToMergeWithinPartition(
                     future_merged_part, can_merge, partition_id, final, metadata_snapshot, NO_TRANSACTION_PTR,
                     disable_reason, query_context->getSettingsRef().optimize_skip_merged_partitions);
@@ -5715,7 +5753,7 @@ bool StorageReplicatedMergeTree::optimize(
             if (select_decision == SelectPartsDecision::NOTHING_TO_MERGE)
                 return false;
 
-            if (select_decision != SelectPartsDecision::SELECTED)
+            if (select_decision != SelectPartsDecision::SELECTED) // 可以进行合并
             {
                 constexpr const char * message_fmt = "Cannot select parts for optimization: {}";
                 assert(disable_reason != unknown_disable_reason);
@@ -5725,6 +5763,7 @@ bool StorageReplicatedMergeTree::optimize(
             }
 
             ReplicatedMergeTreeLogEntryData merge_entry;
+            //由于用户的optimize()操作带来的合并请求，创建对应的合并条目
             CreateMergeEntryResult create_result = createLogEntryToMergeParts(
                 zookeeper, future_merged_part->parts,
                 future_merged_part->name,
@@ -5966,6 +6005,7 @@ void StorageReplicatedMergeTree::alter(
 
                 if (!pulled_queue)
                 {
+                    // 由于调用 StorageReplicatedMergeTree::alter，进行基于ReplicatedMergeTreeQueue::SYNC原因的pullLogsToQueue
                     auto [_, mutations_version] = queue.pullLogsToQueue(zookeeper, {}, ReplicatedMergeTreeQueue::SYNC);
                     maybe_mutations_version_after_logs_pull.emplace(mutations_version);
                     unfinished_mutations = getUnfinishedMutationCommands();
@@ -6190,7 +6230,7 @@ void StorageReplicatedMergeTree::alter(
     if (mutation_znode)
     {
         LOG_DEBUG(log, "Metadata changes applied. Will wait for data changes.");
-        merge_selecting_task->schedule();
+        merge_selecting_task->schedule(); // BackgroundSchedulePoolTaskInfo::schedule()
         waitMutation(*mutation_znode, query_context->getSettingsRef().alter_sync);
         LOG_DEBUG(log, "Data changes applied.");
     }
@@ -7379,7 +7419,7 @@ void StorageReplicatedMergeTree::mutate(const MutationCommands & commands, Conte
             throw Coordination::Exception::fromMessage(rc, "Unable to create a mutation znode");
     }
 
-    merge_selecting_task->schedule();
+    merge_selecting_task->schedule(); // BackgroundSchedulePoolTaskInfo::schedule()
 
     waitMutation(mutation_entry.znode_name, query_context->getSettingsRef().mutations_sync);
 }
@@ -8053,6 +8093,7 @@ void StorageReplicatedMergeTree::replacePartitionFrom(
         lock1.reset();
 
         /// We need to pull the DROP_RANGE before cleaning the replaced parts (otherwise CHeckThread may decide that parts are lost)
+        // 在调用了 StorageReplicatedMergeTree::replacePartitionFrom以后，进行pullLogsToQueue操作，这时候主要是进行DROP_RANGE
         queue.pullLogsToQueue(getZooKeeperAndAssertNotReadonly(), {}, ReplicatedMergeTreeQueue::SYNC);
         parts_holder.clear();
         cleanup_thread.wakeup();
@@ -8313,6 +8354,7 @@ void StorageReplicatedMergeTree::movePartitionToTable(const StoragePtr & dest_ta
         lock1.reset();
 
         /// We need to pull the DROP_RANGE before cleaning the replaced parts (otherwise CHeckThread may decide that parts are lost)
+        // 调用者 StorageReplicatedMergeTree::movePartitionToTable，这时候主要需要处理 DROP_RANGE
         queue.pullLogsToQueue(getZooKeeperAndAssertNotReadonly(), {}, ReplicatedMergeTreeQueue::SYNC);
         parts_holder.clear();
         cleanup_thread.wakeup();
@@ -8541,24 +8583,29 @@ void StorageReplicatedMergeTree::onActionLockRemove(StorageActionBlockType actio
         cleanup_thread.wakeup();
 }
 
+/**
+ * 在InterpreterSystemQuery::syncReplica中被调用
+ */
 bool StorageReplicatedMergeTree::waitForProcessingQueue(UInt64 max_wait_milliseconds, SyncReplicaMode sync_mode)
 {
     /// Let's fetch new log entries firstly
+    // ReplicatedMergeTreeQueue::pullLogsToQueue
+    // 先处理LogEntries，调用者是 StorageReplicatedMergeTree::waitForProcessingQueue
     queue.pullLogsToQueue(getZooKeeperAndAssertNotReadonly(), {}, ReplicatedMergeTreeQueue::SYNC);
 
-    if (sync_mode == SyncReplicaMode::PULL)
+    if (sync_mode == SyncReplicaMode::PULL) // 在 PULL 模式下，队列更新通常是由拉取操作驱动的，不需要进一步等待。
         return true;
 
     /// This is significant, because the execution of this task could be delayed at BackgroundPool.
     /// And we force it to be executed.
-    background_operations_assignee.trigger();
+    background_operations_assignee.trigger(); // 因为任务执行可能会在背景池中延迟，调用 trigger 方法强制任务被执行。
 
-    std::unordered_set<String> wait_for_ids;
+    std::unordered_set<String> wait_for_ids; // 用于存储需要等待的日志条目的 ID
     std::atomic_bool was_interrupted = false;
 
     Poco::Event target_entry_event;
     auto callback = [this, &target_entry_event, &wait_for_ids, &was_interrupted, sync_mode]
-        (size_t new_queue_size, const String * removed_log_entry_id)
+        (size_t new_queue_size, const String * removed_log_entry_id) // callback: 定义了一个回调函数，当队列的状态发生变化时调用：
     {
         if (partial_shutdown_called)
         {
@@ -8571,16 +8618,18 @@ bool StorageReplicatedMergeTree::waitForProcessingQueue(UInt64 max_wait_millisec
         {
             /// Wait for queue to become empty
             if (new_queue_size == 0)
-                target_entry_event.set();
+                target_entry_event.set(); // 果同步模式是 STRICT，则等待队列变为空。
             return;
         }
 
-        if (removed_log_entry_id)
+        if (removed_log_entry_id) // 从 wait_for_ids 中移除已处理的日志条目 ID。
             wait_for_ids.erase(*removed_log_entry_id);
 
         if (wait_for_ids.empty())
-            target_entry_event.set();
+            target_entry_event.set(); // 如果没有需要等待的条目，触发事件。
     };
+    // ReplicatedMergeTreeQueue::addSubscriber
+    // 将回调函数添加到队列订阅者中。订阅者会在队列状态变化时调用回调函数。参数包括：
     const auto handler = queue.addSubscriber(std::move(callback), wait_for_ids, sync_mode);
 
     if (!target_entry_event.tryWait(max_wait_milliseconds))

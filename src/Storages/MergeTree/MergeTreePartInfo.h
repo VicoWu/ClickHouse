@@ -99,9 +99,15 @@ struct MergeTreePartInfo
             || max_block < rhs.min_block;
     }
 
+    /**
+     * 判断一个 MergeTreePartInfo 对象是否表示一个“假删除范围”部分
+     * @return
+     */
     bool isFakeDropRangePart() const
     {
         /// Another max level was previously used for REPLACE/MOVE PARTITION
+        // decltype(level): 这是一个 C++11 引入的关键字，它用于获取变量 level 的类型
+        // std::numeric_limits 模板类来获取 level 类型的最大可能值
         auto another_max_level = std::numeric_limits<decltype(level)>::max();
         return level == MergeTreePartInfo::MAX_LEVEL || level == another_max_level;
     }

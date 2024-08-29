@@ -88,16 +88,24 @@ bool ReplicatedMergeTreeQueue::isVirtualPart(const MergeTreeData::DataPartPtr & 
     return !virtual_part_name.empty() && virtual_part_name != data_part->name;
 }
 
+/**
+ * part_info: 要检查的数据部分的信息。
+   out_drop_range_info: 如果数据部分被丢弃，返回丢弃范围的信息（可选参数）。
+ */
 bool ReplicatedMergeTreeQueue::isGoingToBeDropped(const MergeTreePartInfo & part_info, MergeTreePartInfo * out_drop_range_info) const
 {
     std::lock_guard lock(state_mutex);
     return isGoingToBeDroppedImpl(part_info, out_drop_range_info);
 }
 
+/**
+ * part_info: 要检查的数据部分的信息。
+   out_drop_range_info: 如果数据部分被丢弃，返回丢弃范围的信息（可选参数）。
+ */
 bool ReplicatedMergeTreeQueue::isGoingToBeDroppedImpl(const MergeTreePartInfo & part_info, MergeTreePartInfo * out_drop_range_info) const
 {
     String covering_virtual = virtual_parts.getContainingPart(part_info);
-    if (!covering_virtual.empty())
+    if (!covering_virtual.empty()) //如果有virtual part覆盖了part_info，即二者有交集
     {
         auto covering_virtual_info = MergeTreePartInfo::fromPartName(covering_virtual, format_version);
         if (covering_virtual_info.isFakeDropRangePart())
@@ -220,15 +228,18 @@ void ReplicatedMergeTreeQueue::createLogEntriesToFetchBrokenParts()
     broken_parts_to_enqueue_fetches_on_loading.clear();
 }
 
-
+/**
+ * 在pullLogToQueues中会调用这个方法，这些添加到Zookeeper 的queue中的东西，会添加到ReplicatedMergeTreeQueue::queue中
+ */
 void ReplicatedMergeTreeQueue::insertUnlocked(
+    // std::shared_ptr<ReplicatedMergeTreeLogEntry>;
     const LogEntryPtr & entry, std::optional<time_t> & min_unprocessed_insert_time_changed,
     std::lock_guard<std::mutex> & )
-{state_lock
+{
     auto entry_virtual_parts = entry->getVirtualPartNames(format_version);
 
     LOG_TRACE(log, "Insert entry {} to queue with type {}", entry->znode_name, entry->getDescriptionForLogs(format_version));
-
+    // 遍历所有虚拟分区，将它们添加到 virtual_parts 中。然后，检查分区是否为伪删除范围分区（isFakeDropRangePart()），如果不是，则将其添加到变更（mutations）中。
     for (const String & virtual_part_name : entry_virtual_parts)
     {
         virtual_parts.add(virtual_part_name, nullptr);
@@ -243,6 +254,7 @@ void ReplicatedMergeTreeQueue::insertUnlocked(
         addPartToMutations(virtual_part_name, part_info);
     }
 
+    // 如果条目类型是 DROP_PART，则将其处理为删除分区。添加到 drop_parts 中，并从 virtual_parts 中删除被删除的分区及其覆盖的部分，同时从变更中移除相关的分区。
     if (entry->type == LogEntry::DROP_PART)
     {
         /// DROP PART remove parts, so we remove it from virtual parts to
@@ -254,7 +266,7 @@ void ReplicatedMergeTreeQueue::insertUnlocked(
         virtual_parts.removePartAndCoveredParts(drop_part_name);
         removeCoveredPartsFromMutations(drop_part_name, /*remove_part = */ true, /*remove_covered_parts = */ true);
     }
-
+    // 将 DROP PARTITION 类型的条目插入到队列的前面，以避免多余的部分提取操作。其他条目则添加到队列的末尾。
     /// Put 'DROP PARTITION' entries at the beginning of the queue not to make superfluous fetches of parts that will be eventually deleted
     if (entry->getDropRange(format_version))
         queue.push_front(entry);
@@ -263,6 +275,7 @@ void ReplicatedMergeTreeQueue::insertUnlocked(
 
     if (entry->type == LogEntry::GET_PART || entry->type == LogEntry::ATTACH_PART)
     {
+        // 对于 GET_PART 或 ATTACH_PART 类型的条目，将其插入到 inserts_by_time 集合中，并更新 min_unprocessed_insert_time 以记录最早的未处理插入时间。
         inserts_by_time.insert(entry);
 
         if (entry->create_time && (!min_unprocessed_insert_time || entry->create_time < min_unprocessed_insert_time))
@@ -558,11 +571,18 @@ bool ReplicatedMergeTreeQueue::removeFailedQuorumPart(const MergeTreePartInfo & 
     return virtual_parts.remove(part_info);
 }
 
+/**
+ * 用来从日志中获取LogEntry，然后将Entry写入到Zookeeper的queue中
+ * @param zookeeper
+ * @param watch_callback 设置监视器，继续监视日志目录
+ * @param reason
+ * @return
+ */
 std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::ZooKeeperPtr zookeeper, Coordination::WatchCallback watch_callback, PullLogsReason reason)
 {
     std::lock_guard lock(pull_logs_to_queue_mutex);
 
-    if (reason != LOAD)
+    if (reason != LOAD) // 只有load是因为系统启动触发，这时候是允许一部分东西不完整，否则，基于其它任何原因，都进行相应的完成性检查
     {
         /// It's totally ok to load queue on readonly replica (that's what RestartingThread does on initialization).
         /// It's ok if replica became readonly due to connection loss after we got current zookeeper (in this case zookeeper must be expired).
@@ -576,7 +596,7 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
 
     if (pull_log_blocker.isCancelled())
         throw Exception(ErrorCodes::ABORTED, "Log pulling is cancelled");
-
+    // 获取这个replica的日志指针
     String index_str = zookeeper->get(fs::path(replica_path) / "log_pointer");
     UInt64 index;
 
@@ -584,17 +604,20 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
     Coordination::Stat stat;
     zookeeper->get(fs::path(zookeeper_path) / "log", &stat);
 
+    // 获取zookeeper的log目录下面的所有entry
     Strings log_entries = zookeeper->getChildrenWatch(fs::path(zookeeper_path) / "log", nullptr, watch_callback);
 
     /// We update mutations after we have loaded the list of log entries, but before we insert them
     /// in the queue.
     /// With this we ensure that if you read the log state L1 and then the state of mutations M1,
     /// then L1 "happened-before" M1.
-    int32_t mutations_version = updateMutations(zookeeper);
+    // ReplicatedMergeTreeQueue::updateMutations
+    int32_t mutations_version = updateMutations(zookeeper); // 在updateMutations中会重新调度merge task
 
-    if (index_str.empty())
+    if (index_str.empty()) // 日志指针是空的
     {
         /// If we do not already have a pointer to the log, put a pointer to the first entry in it.
+        // 如果有日志，日志指针指向log下面的第一条日志索引
         index = log_entries.empty() ? 0 : parse<UInt64>(std::min_element(log_entries.begin(), log_entries.end())->substr(strlen("log-")));
 
         zookeeper->set(fs::path(replica_path) / "log_pointer", toString(index));
@@ -604,7 +627,7 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
         index = parse<UInt64>(index_str);
     }
 
-    String min_log_entry = "log-" + padIndex(index);
+    String min_log_entry = "log-" + padIndex(index); // 最小的日志entry
 
     /// Multiple log entries that must be copied to the queue.
 
@@ -614,6 +637,7 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
     {
         ::sort(log_entries.begin(), log_entries.end());
 
+        // 开始对LogEntry遍历并处理
         for (size_t entry_idx = 0, num_entries = log_entries.size(); entry_idx < num_entries;)
         {
             auto begin = log_entries.begin() + entry_idx;
@@ -627,7 +651,7 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
 
             /// Increase the batch size exponentially, so it will saturate to MAX_MULTI_OPS.
             if (current_multi_batch_size < MAX_MULTI_OPS)
-                current_multi_batch_size = std::min<size_t>(MAX_MULTI_OPS, current_multi_batch_size * 2);
+                current_multi_batch_size = std::min<size_t>(MAX_MULTI_OPS, current_multi_batch_size * 2); // current_multi_batch_size按照指数增加
 
             String last_entry = *last;
             if (!startsWith(last_entry, "log-"))
@@ -639,9 +663,9 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
             LOG_DEBUG(log, "Pulling {} entries to queue: {} - {}", (end - begin), *begin, *last);
 
             Strings get_paths;
-            get_paths.reserve(end - begin);
+            get_paths.reserve(end - begin); // 预留空间
 
-            for (auto it = begin; it != end; ++it)
+            for (auto it = begin; it != end; ++it) // 将这一批次的所有entry的path添加到get_paths
                 get_paths.emplace_back(fs::path(zookeeper_path) / "log" / *it);
 
             /// Simultaneously add all new entries to the queue and move the pointer to the log.
@@ -656,14 +680,14 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
             auto get_num = get_results.size();
             for (size_t i = 0; i < get_num; ++i)
             {
-                auto res = get_results[i];
-
+                auto res = get_results[i]; // 获取这个path的数据
+                //解析这个zookeeper logentry，添加到copied_entries中,copied_entries中的对象会添加到
                 copied_entries.emplace_back(LogEntry::parse(res.data, res.stat, format_version));
-
+                // 根据这个entry，创建对应的queue文件
                 ops.emplace_back(zkutil::makeCreateRequest(
                     fs::path(replica_path) / "queue/queue-", res.data, zkutil::CreateMode::PersistentSequential));
 
-                const auto & entry = *copied_entries.back();
+                const auto & entry = *copied_entries.back(); // 返回指向 copied_entries 中最后一个元素的引用。
                 if (entry.type == LogEntry::GET_PART || entry.type == LogEntry::ATTACH_PART)
                 {
                     std::lock_guard state_lock(state_mutex);
@@ -674,7 +698,7 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
                     }
                 }
             }
-
+            // 设置log_pointer
             ops.emplace_back(zkutil::makeSetRequest(
                 fs::path(replica_path) / "log_pointer", toString(last_entry_index + 1), -1));
 
@@ -696,7 +720,8 @@ std::pair<int32_t, int32_t> ReplicatedMergeTreeQueue::pullLogsToQueue(zkutil::Zo
                     copied_entries[copied_entry_idx]->znode_name = path_created.substr(path_created.find_last_of('/') + 1);
 
                     std::optional<time_t> unused = false;
-                    insertUnlocked(copied_entries[copied_entry_idx], unused, state_lock);
+                    // ReplicatedMergeTreeQueue::insertUnlocked
+                    insertUnlocked(copied_entries[copied_entry_idx], unused, state_lock); // 将从 Zookeeper上添加的LogEntry添加到 ReplicatedMergeTreeQueue::queue
                 }
 
                 last_queue_update = time(nullptr);
@@ -858,12 +883,20 @@ ActiveDataPartSet getPartNamesToMutate(
 
 }
 
+/**
+ * 它用于更新集群中复制的表的突变（mutation）状态。这个方法涉及了从 ZooKeeper 获取突变节点、比较和更新本地状态以及调度相关任务的操作
+ * @param zookeeper
+ * @param watch_callback
+ * @return
+ */
 int32_t ReplicatedMergeTreeQueue::updateMutations(zkutil::ZooKeeperPtr zookeeper, Coordination::WatchCallbackPtr watch_callback)
 {
     std::lock_guard lock(update_mutations_mutex);
 
     Coordination::Stat mutations_stat;
+    // 从 ZooKeeper 中获取当前 mutations 路径下的所有子节点名称，代表所有的mutation，同时再次设置了watch，这个watch就是当mutations下面有变化的时候再次触发updateMutations
     Strings entries_in_zk = zookeeper->getChildrenWatch(fs::path(zookeeper_path) / "mutations", &mutations_stat, watch_callback);
+    // 将mutation信息放入到entries_in_zk_set
     StringSet entries_in_zk_set(entries_in_zk.begin(), entries_in_zk.end());
 
     /// Compare with the local state, delete obsolete entries and determine which new entries to load.
@@ -889,7 +922,7 @@ int32_t ReplicatedMergeTreeQueue::updateMutations(zkutil::ZooKeeperPtr zookeeper
                 }
                 else
                     LOG_DEBUG(log, "Removing obsolete mutation {} from local state.", entry.znode_name);
-
+                // 删除过时的突变
                 for (const auto & partition_and_block_num : entry.block_numbers)
                 {
                     auto & in_partition = mutations_by_partition[partition_and_block_num.first];
@@ -903,7 +936,7 @@ int32_t ReplicatedMergeTreeQueue::updateMutations(zkutil::ZooKeeperPtr zookeeper
             else
                 ++it;
         }
-
+        // 添加新的mutation
         for (const String & znode : entries_in_zk_set)
         {
             if (!mutations_by_znode.contains(znode))
@@ -917,15 +950,17 @@ int32_t ReplicatedMergeTreeQueue::updateMutations(zkutil::ZooKeeperPtr zookeeper
     if (!entries_to_load.empty())
     {
         LOG_INFO(log, "Loading {} mutation entries: {} - {}", toString(entries_to_load.size()), entries_to_load.front(), entries_to_load.back());
-
+        // 加载和处理新的mutation
         std::vector<std::future<Coordination::GetResponse>> futures;
+        // 异步获取所有的mutations信息
         for (const String & entry : entries_to_load)
             futures.emplace_back(zookeeper->asyncTryGet(fs::path(zookeeper_path) / "mutations" / entry));
 
         std::vector<ReplicatedMergeTreeMutationEntryPtr> new_mutations;
+        // 异步从 ZooKeeper 加载新突变的mutation信息。
         for (size_t i = 0; i < entries_to_load.size(); ++i)
         {
-            auto maybe_response = futures[i].get();
+            auto maybe_response = futures[i].get(); //  调用会阻塞直到 i 号异步操作完成
             if (maybe_response.error != Coordination::Error::ZOK)
             {
                 assert(maybe_response.error == Coordination::Error::ZNONODE);
@@ -934,6 +969,7 @@ int32_t ReplicatedMergeTreeQueue::updateMutations(zkutil::ZooKeeperPtr zookeeper
                 LOG_WARNING(log, "Cannot get mutation node {} ({}), probably it was concurrently removed", entries_to_load[i], maybe_response.error);
                 continue;
             }
+            // 从zookeeper上获取到了mutation信息，解析成为ReplicatedMergeTreeMutationEntry对象并添加到new_mutations中
             new_mutations.push_back(std::make_shared<ReplicatedMergeTreeMutationEntry>(
                 ReplicatedMergeTreeMutationEntry::parse(maybe_response.data, entries_to_load[i])));
         }
@@ -941,17 +977,19 @@ int32_t ReplicatedMergeTreeQueue::updateMutations(zkutil::ZooKeeperPtr zookeeper
         bool some_mutations_are_probably_done = false;
         {
             std::lock_guard state_lock(state_mutex);
-
+            // 遍历  new_mutations中的每一个 ReplicatedMergeTreeMutationEntryPtr
             for (const ReplicatedMergeTreeMutationEntryPtr & entry : new_mutations)
             {
+                // 插入到 mutations_by_znode中
                 auto & mutation = mutations_by_znode.emplace(entry->znode_name, MutationStatus(entry, format_version))
                     .first->second;
 
-                for (const auto & pair : entry->block_numbers)
+                // 一个entry可以跨多个partition，一个block_numbers 位于是一个partition
+                for (const auto & pair : entry->block_numbers) // 对于这个mutation entry的block numers
                 {
-                    const String & partition_id = pair.first;
-                    Int64 block_num = pair.second;
-                    mutations_by_partition[partition_id].emplace(block_num, &mutation);
+                    const String & partition_id = pair.first; // 提取partition信息
+                    Int64 block_num = pair.second; // 提取block_num
+                    mutations_by_partition[partition_id].emplace(block_num, &mutation); // 把这些mutatition存到各个partition中
                 }
                 LOG_TRACE(log, "Adding mutation {} for {} partitions (data versions: {})",
                           entry->znode_name, entry->block_numbers.size(), entry->getBlockNumbersForLogs());
@@ -962,7 +1000,7 @@ int32_t ReplicatedMergeTreeQueue::updateMutations(zkutil::ZooKeeperPtr zookeeper
                 mutation.parts_to_do = getPartNamesToMutate(*entry, current_parts, queue_representation, format_version);
 
                 if (mutation.parts_to_do.size() == 0)
-                    some_mutations_are_probably_done = true;
+                    some_mutations_are_probably_done = true; // 有些mutation很可能结束了，因此待会儿需要调度 mutations_finalizing_task
 
                 /// otherwise it's already done
                 if (entry->isAlterMutation() && entry->znode_name > mutation_pointer)
@@ -972,11 +1010,13 @@ int32_t ReplicatedMergeTreeQueue::updateMutations(zkutil::ZooKeeperPtr zookeeper
                 }
             }
         }
-
+        // StorageReplicatedMergeTree
+        // BackgroundSchedulePoolTaskInfo::schedule()
+        // 来自方法ReplicatedMergeTreeQueue::updateMutations，更新mutation触发的调度
         storage.merge_selecting_task->schedule();
 
         if (some_mutations_are_probably_done)
-            storage.mutations_finalizing_task->schedule();
+            storage.mutations_finalizing_task->schedule(); // 如果有些mutations已经结束了，那么就调度 mutations_finalizing_task mutationsFinalizingTask()
     }
     return mutations_stat.version;
 }
@@ -1655,7 +1695,9 @@ ReplicatedMergeTreeQueue::CurrentlyExecuting::~CurrentlyExecuting()
     }
 }
 
-
+/**
+ * 从queue中取出来一个可以执行的LogEntry，返回这个LogEntry
+ */
 ReplicatedMergeTreeQueue::SelectedEntryPtr ReplicatedMergeTreeQueue::selectEntryToProcess(MergeTreeDataMergerMutator & merger_mutator, MergeTreeData & data)
 {
     LogEntryPtr entry;
@@ -1664,7 +1706,7 @@ ReplicatedMergeTreeQueue::SelectedEntryPtr ReplicatedMergeTreeQueue::selectEntry
 
     for (auto it = queue.begin(); it != queue.end(); ++it)
     {
-        if ((*it)->currently_executing)
+        if ((*it)->currently_executing) // 如果正在执行，则跳过
             continue;
 
         if (shouldExecuteLogEntry(**it, (*it)->postpone_reason, merger_mutator, data, lock))
@@ -1672,6 +1714,7 @@ ReplicatedMergeTreeQueue::SelectedEntryPtr ReplicatedMergeTreeQueue::selectEntry
             entry = *it;
             /// We gave a chance for the entry, move it to the tail of the queue, after that
             /// we move it to the end of the queue.
+            //  将 it 所指向的元素从其当前位置移动到 queue 列表的末尾 (queue.end() 表示列表的结束位置，但它实际上是指向超出列表最后一个元素的下一个位置，故元素会插入到最后一个有效元素之前)
             queue.splice(queue.end(), queue, it);
             break;
         }
@@ -1719,7 +1762,10 @@ bool ReplicatedMergeTreeQueue::processEntry(
     return true;
 }
 
-
+/**
+ * 遍历ReplicatedMergeTreeQueue的本地queue
+ * @return
+ */
 ReplicatedMergeTreeQueue::OperationsInQueue ReplicatedMergeTreeQueue::countMergesAndPartMutations() const
 {
     std::lock_guard lock(state_mutex);
@@ -1727,7 +1773,7 @@ ReplicatedMergeTreeQueue::OperationsInQueue ReplicatedMergeTreeQueue::countMerge
     size_t count_merges = 0;
     size_t count_mutations = 0;
     size_t count_merges_with_ttl = 0;
-    for (const auto & entry : queue)
+    for (const auto & entry : queue) // 这是ReplicatedMergeTreeQueue的本地queue， using Queue = std::list<LogEntryPtr>;
     {
         if (entry->type == ReplicatedMergeTreeLogEntry::MERGE_PARTS)
         {
@@ -1779,9 +1825,14 @@ std::map<std::string, MutationCommands> ReplicatedMergeTreeQueue::getUnfinishedM
     return result;
 }
 
+/**
+ * 返回一个谓词给MergeTreeMergerMutator用来判定是否merge两个不同的part
+ */
 ReplicatedMergeTreeMergePredicate ReplicatedMergeTreeQueue::getMergePredicate(zkutil::ZooKeeperPtr & zookeeper,
                                                                               std::optional<PartitionIdsHint> && partition_ids_hint)
 {
+    // std::move(partition_ids_hint)：将分区 ID 提示右值引用传递给谓词构造函数。使用 std::move 将其转换为右值，以便传递给构造函数并允许转移所有权。
+    // 这里可能会调用pullLogsToQueue方法来生成对应的任务
     return ReplicatedMergeTreeMergePredicate(*this, zookeeper, std::move(partition_ids_hint));
 }
 
@@ -1857,7 +1908,7 @@ MutationCommands ReplicatedMergeTreeQueue::getMutationCommands(
     std::lock_guard lock(state_mutex);
 
     auto in_partition = mutations_by_partition.find(part->info.partition_id);
-    if (in_partition == mutations_by_partition.end())
+    if (in_partition == mutations_by_partition.end()) // 在mutations_by_partition中没有找到
     {
         LOG_WARNING(log, "There are no mutations for partition ID {} (trying to mutate part {} to {})", part->info.partition_id, part->name, toString(desired_mutation_version));
         return MutationCommands{};
@@ -2198,7 +2249,11 @@ CommittingBlocks BaseMergePredicate<VirtualPartsT, MutationsStateT>::getCommitti
     return committing_blocks;
 }
 
-// 父类是 BaseMergePredicate
+/**
+ * 父类是 BaseMergePredicate
+ * 这个构造是在方法 queue.getMergePredicate 中
+ */
+
 ReplicatedMergeTreeMergePredicate::ReplicatedMergeTreeMergePredicate(
     ReplicatedMergeTreeQueue & queue_, zkutil::ZooKeeperPtr & zookeeper, std::optional<PartitionIdsHint> && partition_ids_hint_)
     : BaseMergePredicate<ActiveDataPartSet, ReplicatedMergeTreeQueue>(std::move(partition_ids_hint_)) // partition_ids_hint_构造父类对象 BaseMergePredicate
@@ -2206,14 +2261,17 @@ ReplicatedMergeTreeMergePredicate::ReplicatedMergeTreeMergePredicate(
 {
     {
         std::lock_guard lock(queue.state_mutex);
-        prev_virtual_parts = std::make_shared<ActiveDataPartSet>(queue.virtual_parts);
+        prev_virtual_parts = std::make_shared<ActiveDataPartSet>(queue.virtual_parts); // 将 queue.virtual_parts 的当前状态复制到 prev_virtual_parts，以便后续比较和处理。
     }
 
     /// Load current quorum status.
+    // 异步地从 ZooKeeper 中获取当前的 quorum 状态
     auto quorum_status_future = zookeeper->asyncTryGet(fs::path(queue.zookeeper_path) / "quorum" / "status");
 
+    // 创建并初始化 committing_blocks，这是一个指向 CommittingBlocks 对象的共享指针。
     committing_blocks = std::make_shared<CommittingBlocks>(getCommittingBlocks(zookeeper, queue.zookeeper_path, queue.log));
 
+    // 进行基于  ReplicatedMergeTreeQueue::MERGE_PREDICATE的pullLogsToQueue操作，没有callback
     std::tie(merges_version, std::ignore) = queue_.pullLogsToQueue(zookeeper, {}, ReplicatedMergeTreeQueue::MERGE_PREDICATE);
 
     {
@@ -2627,7 +2685,14 @@ String ReplicatedMergeTreeMergePredicate::getCoveringVirtualPart(const String & 
     return queue.virtual_parts.getContainingPart(MergeTreePartInfo::fromPartName(part_name, queue.format_version));
 }
 
-
+/**
+ * 允许用户注册回调函数，以便在队列状态变化时得到通知。以下是对该方法的详细解释：
+ * 调用者 是 StorageReplicatedMergeTree::waitForProcessingQueue
+* @param callback
+ * @param out_entry_names
+ * @param sync_mode
+ * @return
+ */
 ReplicatedMergeTreeQueue::SubscriberHandler
 ReplicatedMergeTreeQueue::addSubscriber(ReplicatedMergeTreeQueue::SubscriberCallBack && callback,
                                         std::unordered_set<String> & out_entry_names, SyncReplicaMode sync_mode)
@@ -2635,11 +2700,11 @@ ReplicatedMergeTreeQueue::addSubscriber(ReplicatedMergeTreeQueue::SubscriberCall
     std::lock_guard<std::mutex> lock(state_mutex);
     std::lock_guard lock_subscribers(subscribers_mutex);
 
-    if (sync_mode != SyncReplicaMode::PULL)
+    if (sync_mode != SyncReplicaMode::PULL) // pull 模式下是对方自己去pull，不需要自己处理
     {
         /// We must get the list of entries to wait atomically with adding the callback
-        bool lightweight_entries_only = sync_mode == SyncReplicaMode::LIGHTWEIGHT;
-        static constexpr std::array lightweight_entries =
+        bool lightweight_entries_only = sync_mode == SyncReplicaMode::LIGHTWEIGHT; // 是否仅处理轻量级条目
+        static constexpr std::array lightweight_entries = // 轻量级条目
         {
             LogEntry::GET_PART,
             LogEntry::ATTACH_PART,
@@ -2647,19 +2712,22 @@ ReplicatedMergeTreeQueue::addSubscriber(ReplicatedMergeTreeQueue::SubscriberCall
             LogEntry::REPLACE_RANGE,
             LogEntry::DROP_PART
         };
-        out_entry_names.reserve(queue.size());
-        for (const auto & entry : queue)
+        out_entry_names.reserve(queue.size()); // 预留空间
+        for (const auto & entry : queue) // 遍历 整个queue中的entry using Queue = std::list<LogEntryPtr>;
         {
+            // 如果当前的sync_mode不是SyncReplicaMode::LIGHTWEIGHT，或者虽然是并且entry->type在上面5种条目中，则将条目名称插入 out_entry_names 集合中。
             if (!lightweight_entries_only
                 || std::find(lightweight_entries.begin(), lightweight_entries.end(), entry->type) != lightweight_entries.end())
+
                 out_entry_names.insert(entry->znode_name);
         }
         LOG_TEST(log, "Waiting for {} entries to be processed: {}", out_entry_names.size(), fmt::join(out_entry_names, ", "));
     }
-
-    auto it = subscribers.emplace(subscribers.end(), std::move(callback));
+    // 在方法 void ReplicatedMergeTreeQueue::notifySubscribers中执行通知
+    auto it = subscribers.emplace(subscribers.end(), std::move(callback)); // it 是指向新插入元素的迭代器
 
     /// Atomically notify about current size
+    // 查询方法 StorageReplicatedMergeTree::waitForProcessingQueue 查看callback的参数和定义
     (*it)(queue.size(), nullptr);
 
     return SubscriberHandler(it, *this);

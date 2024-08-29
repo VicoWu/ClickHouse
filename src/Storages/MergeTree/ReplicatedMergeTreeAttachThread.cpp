@@ -116,6 +116,9 @@ void ReplicatedMergeTreeAttachThread::checkHasReplicaMetadataInZooKeeper(const z
     }
 }
 
+/**
+ * 在 ReplicatedMergeTreeRestartingThread::run()中调用
+ */
 void ReplicatedMergeTreeAttachThread::runImpl()
 {
     storage.setZooKeeper();

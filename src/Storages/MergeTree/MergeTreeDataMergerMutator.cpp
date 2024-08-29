@@ -80,30 +80,53 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartsSizeForMerge() const
 }
 
 
+/**
+ *     M(UInt64, max_replicated_merges_in_queue, 1000,
+ *     "How many tasks of merging and mutating parts are allowed simultaneously in ReplicatedMergeTree queue.", 0)
+*/
 UInt64 MergeTreeDataMergerMutator::getMaxSourcePartsSizeForMerge(size_t max_count, size_t scheduled_tasks_count) const
 {
-    if (scheduled_tasks_count > max_count)
+    if (scheduled_tasks_count > max_count) // max_replicated_merges_in_queue
     {
         throw Exception(ErrorCodes::LOGICAL_ERROR,
             "Logical error: invalid argument passed to getMaxSourcePartsSize: scheduled_tasks_count = {} > max_count = {}",
             scheduled_tasks_count, max_count);
     }
 
-    size_t free_entries = max_count - scheduled_tasks_count;
+    size_t free_entries = max_count - scheduled_tasks_count; // 剩余可调度的free entry
     const auto data_settings = data.getSettings();
 
     /// Always allow maximum size if one or less pool entries is busy.
     /// One entry is probably the entry where this function is executed.
     /// This will protect from bad settings.
     UInt64 max_size = 0;
+    /**
+     *     M(UInt64, number_of_free_entries_in_pool_to_lower_max_size_of_merge, 8,
+     *     "When there is less than specified number of free entries in pool (or replicated queue), start to lower maximum size of merge to process (or to put in queue).
+     *     This is to allow small merges to process - not filling the pool with long running merges.", 0) \
+     */
     if (scheduled_tasks_count <= 1 || free_entries >= data_settings->number_of_free_entries_in_pool_to_lower_max_size_of_merge)
-        max_size = data_settings->max_bytes_to_merge_at_max_space_in_pool;
+        // 如果发现剩余可调度的slot的数量大于等于8
+        max_size = data_settings->max_bytes_to_merge_at_max_space_in_pool; //  150GB 最大
     else
+        // 如果空闲槽位不足（free slot < 8），则根据空闲槽位与该阈值的比例，进行指数插值计算，得出一个
+        // 在 max_bytes_to_merge_at_min_space_in_pool 和 max_bytes_to_merge_at_max_space_in_pool 之间的 max_size。
+        /**
+         *     M(UInt64, number_of_free_entries_in_pool_to_lower_max_size_of_merge,
+         *     8, "When there is less than specified number of free entries in pool (or replicated queue),
+         *     start to lower maximum size of merge to process (or to put in queue).
+         *     This is to allow small merges to process - not filling the pool with long running merges.", 0) \
+         *     按照比例进行插值，free_entries越大，max_size越大
+         */
         max_size = static_cast<UInt64>(interpolateExponential(
-            data_settings->max_bytes_to_merge_at_min_space_in_pool,
-            data_settings->max_bytes_to_merge_at_max_space_in_pool,
+            data_settings->max_bytes_to_merge_at_min_space_in_pool, // 1MB
+            data_settings->max_bytes_to_merge_at_max_space_in_pool, // 150GB
             static_cast<double>(free_entries) / data_settings->number_of_free_entries_in_pool_to_lower_max_size_of_merge));
-
+    /**
+     * 合并的part大小必须小于磁盘剩余可用空间的1/2(DISK_USAGE_COEFFICIENT_TO_SELECT)
+     * 但是不能超过150GB
+     * UInt64 StoragePolicy::getMaxUnreservedFreeSpace() const
+     */
     return std::min(max_size, static_cast<UInt64>(data.getStoragePolicy()->getMaxUnreservedFreeSpace() / DISK_USAGE_COEFFICIENT_TO_SELECT));
 }
 
@@ -111,27 +134,40 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartsSizeForMerge(size_t max_coun
 UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
 {
     const auto data_settings = data.getSettings();
+    // 已经占用的task的数量
+    // 查看 shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
+    // 当前pending和active 中的task的数量
     size_t occupied = CurrentMetrics::values[CurrentMetrics::BackgroundMergesAndMutationsPoolTask].load(std::memory_order_relaxed);
-
+    //     M(UInt64, max_number_of_mutations_for_replica, 0, "Limit the number of part mutations per replica to the specified amount.
+    //     Zero means no limit on the number of mutations per replica (the execution can still be constrained by other settings).", 0) \\
+    // 最大允许运行的mutation数量，默认是不限制
     if (data_settings->max_number_of_mutations_for_replica > 0 &&
         occupied >= data_settings->max_number_of_mutations_for_replica)
         return 0;
 
     /// DataPart can be store only at one disk. Get maximum reservable free space at all disks.
-    UInt64 disk_space = data.getStoragePolicy()->getMaxUnreservedFreeSpace();
-    auto max_tasks_count = data.getContext()->getMergeMutateExecutor()->getMaxTasksCount();
+    UInt64 disk_space = data.getStoragePolicy()->getMaxUnreservedFreeSpace(); // 所有disk中最大的没预留的disk数量
+    // 搜索 size_t MergeTreeBackgroundExecutor<Queue>::getMaxTasksCount()
+    // 最大任务数量，即给active/pending队列的各自的capacity，这里默认是32
+    auto max_tasks_count = data.getContext()->getMergeMutateExecutor()->getMaxTasksCount(); // 最大的task数量
 
-    /// Allow mutations only if there are enough threads, leave free threads for merges else
+    /**
+     * Allow mutations only if there are enough threads, leave free threads for merges else
+     * M(UInt64, number_of_free_entries_in_pool_to_execute_mutation,
+       20, "When there is less than specified number of free entries in pool, do not execute part mutations.
+       This is to leave free threads for regular merges and avoid \"Too many parts\"", 0) \
+       如果剩余的允许的task数量(或者是pending，或者是active)大于20，那么就不允许执行mutate，以便给merge留出足够的空间
+    **/
     if (occupied <= 1
         || max_tasks_count - occupied >= data_settings->number_of_free_entries_in_pool_to_execute_mutation)
-        return static_cast<UInt64>(disk_space / DISK_USAGE_COEFFICIENT_TO_RESERVE);
+        return static_cast<UInt64>(disk_space / DISK_USAGE_COEFFICIENT_TO_RESERVE); // 最大剩余磁盘空间除以1.1，即最大允许的mutate的大小要稍小于最大磁盘空间大小
 
     return 0;
 }
 
 /**
- * 调用者 torageReplicatedMergeTree::mergeSelectingTask
-
+ * 调用者 ReplicatedMergeTree::mergeSelectingTask
+ * 和 StorageReplicatedMergeTree::optimize
  * @return
  */
 SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
@@ -140,7 +176,7 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
     size_t max_total_size_to_merge,
     const AllowedMergingPredicate & can_merge_callback, // 搜索 using AllowedMergingPredicate查看 AllowedMergingPredicate
     bool merge_with_ttl_allowed,
-    const MergeTreeTransactionPtr & txn,
+    const MergeTreeTransactionPtr & txn, // 没有txn
     String & out_disable_reason,
     const PartitionIdsHint * partitions_hint)
 {
@@ -164,7 +200,7 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
         return SelectPartsDecision::CANNOT_SELECT;
     }
 
-    //  第三部，选择要合并的part，调用查看 MergeTreeDataMergerMutator::selectPartsToMergeFromRanges
+    //  第三步，选择要合并的part，调用查看 MergeTreeDataMergerMutator::selectPartsToMergeFromRanges
     auto res = selectPartsToMergeFromRanges(future_part, aggressive, max_total_size_to_merge, merge_with_ttl_allowed,
                                             metadata_snapshot, info.parts_ranges, info.current_time, out_disable_reason);
 

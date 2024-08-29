@@ -20,14 +20,18 @@ BackgroundSchedulePoolTaskInfo::BackgroundSchedulePoolTaskInfo(
 {
 }
 
+/**
+ * 这个方法用于立即调度一个任务。具体操作步骤如下：
+ */
+
 bool BackgroundSchedulePoolTaskInfo::schedule()
 {
     std::lock_guard lock(schedule_mutex);
-
+    // 如果这个BackgroundSchedulePoolTaskInfo 是 deactivated或者scheduled状态，不再调度
     if (deactivated || scheduled)
         return false;
-
-    scheduleImpl(lock);
+    // void BackgroundSchedulePoolTaskInfo::scheduleImpl
+    scheduleImpl(lock); // 将这个task放在对应的BackgroundSchedulePool中执行
     return true;
 }
 
@@ -37,7 +41,7 @@ bool BackgroundSchedulePoolTaskInfo::scheduleAfter(size_t milliseconds, bool ove
 
     if (deactivated || scheduled)
         return false;
-    if (delayed && !overwrite)
+    if (delayed && !overwrite) // 已经被延迟调度 (delayed == true)，并且 overwrite 参数为 false，则方法返回 false，表示不会重新调度任务。
         return false;
     if (!delayed && only_if_scheduled)
         return false;
@@ -75,7 +79,7 @@ bool BackgroundSchedulePoolTaskInfo::activateAndSchedule()
     if (scheduled)
         return false;
 
-    scheduleImpl(lock);
+    scheduleImpl(lock); // BackgroundSchedulePoolTaskInfo::scheduleImpl
     return true;
 }
 
@@ -96,14 +100,14 @@ void BackgroundSchedulePoolTaskInfo::execute()
 
         if (deactivated)
             return;
-
+        // 设置任务调度状态标记为false,如果任务执行期间没有其它地方重新执行schedule()，那么这里执行完了就不会再调度
         scheduled = false;
         executing = true;
     }
 
     try
     {
-        function();
+        function(); // 执行任务
     }
     catch (...)
     {
@@ -119,6 +123,7 @@ void BackgroundSchedulePoolTaskInfo::execute()
         LOG_TRACE(&Poco::Logger::get(log_name), "Execution took {} ms.", milliseconds);
 
     {
+        // 再次锁定 schedule_mutex 互斥锁，将 executing 标志设置为 false，表示任务执行完毕
         std::lock_guard lock_schedule(schedule_mutex);
 
         executing = false;
@@ -126,31 +131,40 @@ void BackgroundSchedulePoolTaskInfo::execute()
         /// In case was scheduled while executing (including a scheduleAfter which expired) we schedule the task
         /// on the queue. We don't call the function again here because this way all tasks
         /// will have their chance to execute
-
+        // 检查任务在执行期间是否被重新调度（scheduled 为 true）。如果是，则将任务重新加入任务队列中执行。
         if (scheduled)
-            pool.scheduleTask(shared_from_this());
+            pool.scheduleTask(shared_from_this()); // 将当前的Task推送到pool中
     }
 }
 
 void BackgroundSchedulePoolTaskInfo::scheduleImpl(std::lock_guard<std::mutex> & schedule_mutex_lock)
 {
-    scheduled = true;
-
-    if (delayed)
+    scheduled = true; // scheduled 标记位置位，防止这个task被重复调度
+    /**
+     * 如果任务之前是被延迟执行的（即 delayed 为 true），
+     * 那么就通过调用 pool.cancelDelayedTask() 取消这个延迟执行的计划。这样做的目的是确保任务不再被延迟，而是马上执行。
+     */
+    if (delayed) //
         pool.cancelDelayedTask(shared_from_this(), schedule_mutex_lock);
 
     /// If the task is not executing at the moment, enqueue it for immediate execution.
     /// But if it is currently executing, do nothing because it will be enqueued
     /// at the end of the execute() method.
+    /**
+     *  如果任务没有在执行，那么通过调用 pool.scheduleTask(shared_from_this()) 立即将任务加入到执行队列中。
+        如果任务正在执行，则不再重新安排它，因为任务会在当前执行完成后自动重新加入队列等待下一次执行。
+        void BackgroundSchedulePool::scheduleTask(TaskInfoPtr task_info)
+     */
     if (!executing)
-        pool.scheduleTask(shared_from_this());
+        // 这里的Pool是 BackgroundSchedulePool，不是真正的线程池ThreadPool
+        pool.scheduleTask(shared_from_this()); // shared_from_this()代表当前的 BackgroundSchedulePoolTaskInfo 对象
 }
 
 Coordination::WatchCallback BackgroundSchedulePoolTaskInfo::getWatchCallback()
 {
      return [task = shared_from_this()](const Coordination::WatchResponse &)
      {
-        task->schedule();
+        task->schedule(); // 这个回调执行的就是重新调度
      };
 }
 
@@ -232,8 +246,12 @@ BackgroundSchedulePool::~BackgroundSchedulePool()
 }
 
 
+
 BackgroundSchedulePool::TaskHolder BackgroundSchedulePool::createTask(const std::string & name, const TaskFunc & function)
 {
+    // BackgroundSchedulePoolTaskHolder
+    // using TaskHolder = BackgroundSchedulePoolTaskHolder;
+    // 将当前的pool传入TaskHolder
     return TaskHolder(std::make_shared<TaskInfo>(*this, name, function));
 }
 
@@ -241,7 +259,7 @@ void BackgroundSchedulePool::scheduleTask(TaskInfoPtr task_info)
 {
     {
         std::lock_guard tasks_lock(tasks_mutex);
-        tasks.push_back(std::move(task_info));
+        tasks.push_back(std::move(task_info)); //将任务推送到tasks中
     }
 
     tasks_cond_var.notify_one();
@@ -283,8 +301,9 @@ void BackgroundSchedulePool::threadFunction()
 
     while (!shutdown)
     {
+        // using TaskInfo = BackgroundSchedulePoolTaskInfo;
+        // using TaskInfoPtr = std::shared_ptr<TaskInfo>;
         TaskInfoPtr task;
-
         {
             std::unique_lock<std::mutex> tasks_lock(tasks_mutex);
 
@@ -301,7 +320,7 @@ void BackgroundSchedulePool::threadFunction()
         }
 
         if (task)
-            task->execute();
+            task->execute(); // 调用 BackgroundSchedulePoolTaskInfo::execute()
     }
 }
 

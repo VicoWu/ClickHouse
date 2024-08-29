@@ -1199,8 +1199,8 @@ protected:
           这类操作在 MergeTree 和 ReplicatedMergeTree 中是通用的，独立于数据的合并和变异操作。
           在MergeTreeData::MergeTreeData构造方法中构造了BackgroundJobsAssignee。如果是replicatedMergeTree，那么就是 StorageReplicatedMergeTree
      */
-    BackgroundJobsAssignee background_operations_assignee;
-    BackgroundJobsAssignee background_moves_assignee;
+    BackgroundJobsAssignee background_operations_assignee; // Type = BackgroundJobsAssignee::Type::DataProcessing
+    BackgroundJobsAssignee background_moves_assignee; // Type = BackgroundJobsAssignee::Type::Moving
 
     /// Strongly connected with two fields above.
     /// Every task that is finished will ask to assign a new one into an executor.

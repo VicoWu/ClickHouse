@@ -39,7 +39,8 @@ private:
     friend class ReplicatedMergeMutateTaskBase;
 
     using LogEntry = ReplicatedMergeTreeLogEntry;
-    using LogEntryPtr = LogEntry::Ptr;
+    // using Ptr = std::shared_ptr<ReplicatedMergeTreeLogEntry>;
+    using LogEntryPtr = LogEntry::Ptr; // std::shared_ptr<ReplicatedMergeTreeLogEntry>;
 
     using Queue = std::list<LogEntryPtr>;
 
@@ -104,12 +105,17 @@ private:
 
     /** What will be the set of active parts after executing all log entries up to log_pointer.
       * Used to determine which merges can be assigned (see ReplicatedMergeTreeMergePredicate)
+      * 背景: 在分布式系统中，每个副本表（ReplicatedMergeTree）都有一个操作日志，这些日志记录了对表的操作（例如插入、删除、合并）。
+      * virtual_parts 是一个集合，表示在执行这些日志操作之后，哪些数据部分将会变为活跃状态。
       */
     ActiveDataPartSet virtual_parts;
 
 
     /// We do not add DROP_PARTs to virtual_parts because they can intersect,
     /// so we store them separately in this structure.
+    /**
+     * 用于存储删除操作的结构。具体来说，它跟踪了哪些数据部分被删除了，或者即将被删除。
+     */
     DropPartsRanges drop_parts;
 
     /// A set of mutations loaded from ZooKeeper.
@@ -325,7 +331,7 @@ public:
         OTHER,
     };
 
-    /** Copy the new entries from the shared log to the queue of this replica. Set the log_pointer to the appropriate value.
+    /** Copy the new d log to the entries from the sharequeue of this replica. Set the log_pointer to the appropriate value.
       * If watch_callback is not empty, will call it when new entries appear in the log.
       * If there were new entries, notifies storage.queue_task_handle.
       * Additionally loads mutations (so that the set of mutations is always more recent than the queue).

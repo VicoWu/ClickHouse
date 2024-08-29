@@ -212,10 +212,10 @@ DiskPtr StoragePolicy::tryGetDiskByName(const String & disk_name) const
 UInt64 StoragePolicy::getMaxUnreservedFreeSpace() const
 {
     std::optional<UInt64> res;
-    for (const auto & volume : volumes)
+    for (const auto & volume : volumes) // 遍历每个磁盘，获取一个可用空间最大的磁盘的可用空间
     {
         auto volume_unreserved_space = volume->getMaxUnreservedFreeSpace();
-        if (!volume_unreserved_space)
+        if (!volume_unreserved_space) // 这是一个空间不受限制的磁盘
             return -1ULL; /// There is at least one unlimited disk.
 
         if (!res || *volume_unreserved_space > *res)

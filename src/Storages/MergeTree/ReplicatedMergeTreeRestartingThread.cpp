@@ -38,10 +38,13 @@ ReplicatedMergeTreeRestartingThread::ReplicatedMergeTreeRestartingThread(Storage
 {
     const auto storage_settings = storage.getSettings();
     check_period_ms = storage_settings->zookeeper_session_expiration_check_period.totalSeconds() * 1000;
-
+    // 构造对应的 TaskHolder，实际上是调用 ReplicatedMergeTreeRestartingThread::run()
     task = storage.getContext()->getSchedulePool().createTask(log_name, [this]{ run(); });
 }
 
+/**
+ * 在 ReplicatedMergeTreeRestartingThread的构造中用来构造 TaskHolder
+ */
 void ReplicatedMergeTreeRestartingThread::run()
 {
     if (need_stop)
@@ -54,16 +57,17 @@ void ReplicatedMergeTreeRestartingThread::run()
 
     try
     {
-        bool replica_is_active = runImpl();
+        // 实际上是执行 ReplicatedMergeTreeRestartingThread::runImpl()
+        bool replica_is_active = runImpl(); // ReplicatedMergeTreeRestartingThread::runImpl()
         if (replica_is_active)
         {
             consecutive_check_failures = 0;
-            task->scheduleAfter(check_period_ms);
+            task->scheduleAfter(check_period_ms); // 继续调度，BackgroundSchedulePoolTaskInfo::scheduleAfter
         }
         else
         {
             consecutive_check_failures++;
-            task->scheduleAfter(next_failure_retry_ms);
+            task->scheduleAfter(next_failure_retry_ms); // 继续调度，BackgroundSchedulePoolTaskInfo::scheduleAfter
         }
     }
     catch (...)
@@ -137,11 +141,11 @@ bool ReplicatedMergeTreeRestartingThread::runImpl()
     setNotReadonly();
 
     /// Start queue processing
-    storage.background_operations_assignee.start();
+    storage.background_operations_assignee.start(); // 启动后台的assignee线程 BackgroundJobsAssignee::start()
     storage.queue_updating_task->activateAndSchedule();
     storage.mutations_updating_task->activateAndSchedule();
     storage.mutations_finalizing_task->activateAndSchedule();
-    storage.merge_selecting_task->activateAndSchedule();
+    storage.merge_selecting_task->activateAndSchedule(); // BackgroundSchedulePoolTaskInfo::schedule()
     storage.cleanup_thread.start();
     storage.async_block_ids_cache.start();
     storage.part_check_thread.start();
@@ -172,6 +176,7 @@ bool ReplicatedMergeTreeRestartingThread::tryStartup()
 
             /// pullLogsToQueue() after we mark replica 'is_active' (and after we repair if it was lost);
             /// because cleanup_thread doesn't delete log_pointer of active replicas.
+            // 当一个replica变成了active，会进行一些启动的操作，因此进行基于 ReplicatedMergeTreeQueue::LOAD 的 pullLogsToQueue()操作
             storage.queue.pullLogsToQueue(zookeeper, {}, ReplicatedMergeTreeQueue::LOAD);
         }
         catch (...)

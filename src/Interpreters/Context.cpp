@@ -4795,6 +4795,9 @@ void Context::setAsynchronousInsertQueue(const std::shared_ptr<AsynchronousInser
     shared->async_insert_queue = ptr;
 }
 
+/**
+ * 初始化 MergeMutateBackgroundExecutor
+ */
 void Context::initializeBackgroundExecutorsIfNeeded()
 {
     std::lock_guard lock(shared->background_executors_mutex);
@@ -4805,6 +4808,7 @@ void Context::initializeBackgroundExecutorsIfNeeded()
     const ServerSettings & server_settings = shared->server_settings;
     size_t background_pool_size = server_settings.background_pool_size;
     auto background_merges_mutations_concurrency_ratio = server_settings.background_merges_mutations_concurrency_ratio;
+    //         // M(Float, background_merges_mutations_concurrency_ratio, 2, "The number of part mutation tasks that can be executed concurrently by each thread in background pool.", 0) \
     size_t background_pool_max_tasks_count = static_cast<size_t>(background_pool_size * background_merges_mutations_concurrency_ratio);
     String background_merges_mutations_scheduling_policy = server_settings.background_merges_mutations_scheduling_policy;
     size_t background_move_pool_size = server_settings.background_move_pool_size;
@@ -4812,13 +4816,15 @@ void Context::initializeBackgroundExecutorsIfNeeded()
     size_t background_common_pool_size = server_settings.background_common_pool_size;
 
     /// With this executor we can execute more tasks than threads we have
+    // using MergeMutateBackgroundExecutor = MergeTreeBackgroundExecutor<DynamicRuntimeQueue>;
+    // 构造方法实现 搜索 MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
     (
         "MergeMutate",
-        /*max_threads_count*/background_pool_size,
-        /*max_tasks_count*/background_pool_max_tasks_count,
-        CurrentMetrics::BackgroundMergesAndMutationsPoolTask,
-        CurrentMetrics::BackgroundMergesAndMutationsPoolSize,
+        /*max_threads_count*/background_pool_size, // 线程池的最大线程数量 M(UInt64, background_pool_size, 16, "The maximum number of threads what will be used for merging or mutating data parts for *MergeTree-engine tables in a background.", 0) \
+        /*max_tasks_count*/background_pool_max_tasks_count,  // 16 * 2 = 32，pending队列和active队列的最大任务数量(分别，不是总和)
+        CurrentMetrics::BackgroundMergesAndMutationsPoolTask, // 当前处于pending/active队列中的task的实时数量
+        CurrentMetrics::BackgroundMergesAndMutationsPoolSize, // 最大的大小，32 * 2，很显然，pending队列和active队列分别最大32，因此总共最大64
         background_merges_mutations_scheduling_policy
     );
     LOG_INFO(shared->log, "Initialized background executor for merges and mutations with num_threads={}, num_tasks={}, scheduling_policy={}",

@@ -20,8 +20,10 @@ class MergeFromLogEntryTask : public ReplicatedMergeMutateTaskBase
 {
 public:
     MergeFromLogEntryTask(
-        ReplicatedMergeTreeQueue::SelectedEntryPtr selected_entry_,
-        StorageReplicatedMergeTree & storage_,
+        ReplicatedMergeTreeQueue::SelectedEntryPtr selected_entry_, // 选择的对应Merge Task的LogEntry
+        StorageReplicatedMergeTree & storage_, // 对应的StorageReplicatedMergeTree
+        // callback的定义是 common_assignee_trigger = [this] (bool delay) noexcept
+        // 对应的callback，callback的调用发生在 void ReplicatedMergeMutateTaskBase::onCompleted()
         IExecutableTask::TaskResultCallback & task_result_callback_);
 
     Priority getPriority() const override { return priority; }

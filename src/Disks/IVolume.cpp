@@ -56,10 +56,10 @@ std::optional<UInt64> IVolume::getMaxUnreservedFreeSpace() const
     {
         auto disk_unreserved_space = disk->getUnreservedSpace();
         if (!disk_unreserved_space)
-            return std::nullopt; /// There is at least one unlimited disk.
+            return std::nullopt; /// There is at least one unlimited disk. 有一个磁盘的未保留空间是无限的
 
         if (!res || *disk_unreserved_space > *res)
-            res = disk_unreserved_space;
+            res = disk_unreserved_space; // 获取磁盘的最大未保留空间
     }
     return res;
 }

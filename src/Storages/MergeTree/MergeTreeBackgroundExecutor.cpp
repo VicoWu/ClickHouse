@@ -26,35 +26,46 @@ namespace ErrorCodes
     extern const int INVALID_CONFIG_PARAMETER;
 }
 
-
+// 搜索 shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
+/**
+* shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
+* (
+*     "MergeMutate",
+*     background_pool_size, // 16
+*     background_pool_max_tasks_count, // 16 * 2
+*     CurrentMetrics::BackgroundMergesAndMutationsPoolTask, // 当前处于active/pending队列中的task实时数量
+*     CurrentMetrics::BackgroundMergesAndMutationsPoolSize, 2 * 32 = 64
+*     background_merges_mutations_scheduling_policy
+* );
+**/
 template <class Queue>
 MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     String name_,
-    size_t threads_count_,
-    size_t max_tasks_count_,
+    size_t threads_count_, // 16
+    size_t max_tasks_count_, // 32
     CurrentMetrics::Metric metric_,
     CurrentMetrics::Metric max_tasks_metric_,
     std::string_view policy)
     : name(name_)
     , threads_count(threads_count_)
-    , max_tasks_count(max_tasks_count_)
-    , metric(metric_)
-    , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // active + pending
+    , max_tasks_count(max_tasks_count_) // 最大任务数量 默认  threads_count_ * max_tasks_count_ = 32
+    , metric(metric_)  // 已经调度的task的数量(位于pending队列或者active队列)
+    , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // active + pending 2 * 32 = 64
     , pool(std::make_unique<ThreadPool>(
           CurrentMetrics::MergeTreeBackgroundExecutorThreads, CurrentMetrics::MergeTreeBackgroundExecutorThreadsActive, CurrentMetrics::MergeTreeBackgroundExecutorThreadsScheduled))
 {
     if (max_tasks_count == 0)
         throw Exception(ErrorCodes::INVALID_CONFIG_PARAMETER, "Task count for MergeTreeBackgroundExecutor must not be zero");
 
-    pending.setCapacity(max_tasks_count);
-    active.set_capacity(max_tasks_count);
-
-    pool->setMaxThreads(std::max(1UL, threads_count));
-    pool->setMaxFreeThreads(std::max(1UL, threads_count));
-    pool->setQueueSize(std::max(1UL, threads_count));
+    pending.setCapacity(max_tasks_count); // 设置pending和active的数量
+    active.set_capacity(max_tasks_count); // 设置active的capacity
+    // 这里的Pool是ThreadPool
+    pool->setMaxThreads(std::max(1UL, threads_count));// 设置这个pool的最大线程数量
+    pool->setMaxFreeThreads(std::max(1UL, threads_count));// 设置这个pool的最大空闲线程数量
+    pool->setQueueSize(std::max(1UL, threads_count));// 设置这个pool的队列数量
 
     for (size_t number = 0; number < threads_count; ++number)
-        pool->scheduleOrThrowOnError([this] { threadFunction(); });
+        pool->scheduleOrThrowOnError([this] { threadFunction(); }); // 每一个线程都不断执行threadFunction()
 
     if (!policy.empty())
         pending.updatePolicy(policy);
@@ -126,6 +137,8 @@ size_t MergeTreeBackgroundExecutor<Queue>::getMaxTasksCount() const
     return max_tasks_count.load(std::memory_order_relaxed);
 }
 
+// 调用者: bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
+// MergeFromLogEntryTask 或者 MutateFromLogEntryTask
 template <class Queue>
 bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
 {
@@ -137,8 +150,9 @@ bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
     auto & value = CurrentMetrics::values[metric];
     if (value.load() >= static_cast<int64_t>(max_tasks_count))
         return false;
-
-    pending.push(std::make_shared<TaskRuntimeData>(std::move(task), metric));
+    // 将这个task封装成为TaskRuntimeData，然后放到pending中
+    // MergeTreeBackgroundExecutor<Queue>::threadFunction() 将会从pending中取出task然后放到active中
+    pending.push(std::make_shared<TaskRuntimeData>(std::move(task), metric)); // using TaskRuntimeDataPtr = std::shared_ptr<TaskRuntimeData>;
 
     has_tasks.notify_one();
     return true;
@@ -210,6 +224,9 @@ void MergeTreeBackgroundExecutor<Queue>::removeTasksCorrespondingToStorage(Stora
     }
 }
 
+/**
+ * routine()方法负责实际执行任务，并处理任务完成或重新调度的逻辑。
+ */
 template <class Queue>
 void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
 {
@@ -222,7 +239,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     {
         active.erase(std::remove(active.begin(), active.end(), item_), active.end());
     };
-
+    // task执行成功的回调
     auto on_task_done = [] (TaskRuntimeDataPtr && item_) TSA_REQUIRES(mutex)
     {
         /// We have to call reset() under a lock, otherwise a race is possible.
@@ -238,6 +255,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
         item_.reset();
     };
 
+    // lambda定义的task重启逻辑，会将task重新加入到pending中
     auto on_task_restart = [this](TaskRuntimeDataPtr && item_) TSA_REQUIRES(mutex)
     {
         /// After the `guard` destruction `item` has to be in moved from state
@@ -249,7 +267,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     };
 
     String query_id;
-
+    // labmda定义的释放task的逻辑，会将task从active中删除，并在中执行通知
     auto release_task = [this, &erase_from_active, &on_task_done, &query_id](TaskRuntimeDataPtr && item_)
     {
         std::lock_guard guard(mutex);
@@ -279,10 +297,11 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     {
         ALLOW_ALLOCATIONS_IN_SCOPE;
         query_id = item->task->getQueryId();
-        need_execute_again = item->task->executeStep();
+        need_execute_again = item->task->executeStep(); // 调用对应task的executeStep()方法
     }
     catch (...)
     {
+
         if (item->task->printExecutionException())
             printExceptionWithRespectToAbort(log, query_id);
         /// Release the task with exception context.
@@ -291,13 +310,13 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
         return;
     }
 
-    if (!need_execute_again)
-    {
+    if (!need_execute_again) // 不需要重新执行
+    {   // 如果任务不需要再次执行，routine()会调用release_task(std::move(item));方法，释放该任务，标记任务为完成。
         release_task(std::move(item));
         return;
     }
 
-    {
+    { // 需要重新执行
         std::lock_guard guard(mutex);
         erase_from_active(item);
 
@@ -317,11 +336,16 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
             }
         }
 
-        on_task_restart(std::move(item));
+        on_task_restart(std::move(item)); // 执行task重启的labdmda
     }
 }
 
 
+/**
+ * 在MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor中不断被调度
+ * 每个线程会执行一个threadFunction
+ * @tparam Queue
+ */
 template <class Queue>
 void MergeTreeBackgroundExecutor<Queue>::threadFunction()
 {
@@ -344,7 +368,7 @@ void MergeTreeBackgroundExecutor<Queue>::threadFunction()
                 item = std::move(pending.pop());
                 active.push_back(item);
             }
-
+            // 一旦有新任务进入pending队列，线程会从pending队列中弹出一个任务，并将其移动到active队列中。这一步骤确保任务从pending到active的状态转换。然后，线程调用routine(std::move(item));来执行任务。
             routine(std::move(item));
         }
         catch (...)

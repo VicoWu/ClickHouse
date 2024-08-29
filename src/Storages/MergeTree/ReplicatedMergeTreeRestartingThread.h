@@ -18,19 +18,21 @@ class StorageReplicatedMergeTree;
   * Exposes ephemeral nodes. It sets the node values that are required for replica detection.
   * Starts participation in the leader selection. Starts all background threads.
   * Then monitors whether the session has expired. And if it expired, it will reinitialize it.
+  *
+  * 构造查看 ReplicatedMergeTreeRestartingThread restarting_thread;
   */
 class ReplicatedMergeTreeRestartingThread
 {
 public:
     explicit ReplicatedMergeTreeRestartingThread(StorageReplicatedMergeTree & storage_);
-
+    // ReplicatedMergeTreeRestartingThread::start
     void start(bool schedule = true)
     {
         LOG_TRACE(log, "Starting restating thread, schedule: {}", schedule);
         if (schedule)
-            task->activateAndSchedule();
+            task->activateAndSchedule(); // 调用对应的TaskHolder的 BackgroundSchedulePoolTaskInfo::activateAndSchedule()
         else
-            task->activate();
+            task->activate(); // 调用对应的TaskHolder的activate BackgroundSchedulePoolTaskInfo::activate()
     }
 
     void wakeup() { task->schedule(); }

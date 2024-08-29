@@ -19,14 +19,14 @@ slug: /zh/operations/system-tables/replication_queue
 
 -   `type` ([String](../../sql-reference/data-types/string.md)) — 队列中任务的类型, 其中之一:
 
-    -   `GET_PART` — 从另一个副本获取分片.
-    -   `ATTACH_PART` — 附加的部分, 可能来自我们自己的副本(如果在 `detached` 文件夹中找到). 您可以将其视为具有一些优化的 `GET_PART` , 因为它们几乎相同.
-    -   `MERGE_PARTS` — 合并分片.
-    -   `DROP_RANGE` — 删除指定分区内指定编号范围内的分片.
+    -   `GET_PART` — 从另一个副本获取part.
+    -   `ATTACH_PART` — 附加的part, 可能来自我们自己的副本(如果在 `detached` 文件夹中找到). 您可以将其视为具有一些优化的 `GET_PART` , 因为它们几乎相同.
+    -   `MERGE_PARTS` — 合并part.
+    -   `DROP_RANGE` — 删除指定分区内指定编号范围内的part.
     -   `CLEAR_COLUMN` — 注意：已弃用. 从指定分区删除特定列.
     -   `CLEAR_INDEX` — 注意：已弃用. 从指定分区删除特定索引.
     -   `REPLACE_RANGE` — 丢弃一定范围的零件并用新零件替换它们.
-    -   `MUTATE_PART` — 对分片应用一个或多个突变.
+    -   `MUTATE_PART` — 对分片去apply一个或多个mutation.
     -   `ALTER_METADATA` — 根据全局 /metadata 和 /columns 路径应用alter修改.
 
 -   `create_time` ([DateTime](../../sql-reference/data-types/datetime.md)) — 提交任务执行的日期和时间.

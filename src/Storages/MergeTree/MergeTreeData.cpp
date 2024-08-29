@@ -416,10 +416,10 @@ MergeTreeData::MergeTreeData(
 
     common_assignee_trigger = [this] (bool delay) noexcept
     {
-        if (delay)
-            background_operations_assignee.postpone();
-        else
-            background_operations_assignee.trigger();
+        if (delay) // 执行失败的时候调用
+            background_operations_assignee.postpone(); // 如果失败，那么delay一段时间再进行调用 void BackgroundJobsAssignee::postpone()
+        else // 执行成功的时候调用
+            background_operations_assignee.trigger(); // 如果成功，那么立刻开始下一个调用 void BackgroundJobsAssignee::trigger()
     };
 
     moves_assignee_trigger = [this] (bool delay) noexcept
