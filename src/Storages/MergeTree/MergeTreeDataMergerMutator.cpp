@@ -136,7 +136,7 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
     const auto data_settings = data.getSettings();
     // 已经占用的task的数量
     // 查看 shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
-    // 当前pending和active 中的task的数量
+    // 当前pending + active中的task的数量
     size_t occupied = CurrentMetrics::values[CurrentMetrics::BackgroundMergesAndMutationsPoolTask].load(std::memory_order_relaxed);
     //     M(UInt64, max_number_of_mutations_for_replica, 0, "Limit the number of part mutations per replica to the specified amount.
     //     Zero means no limit on the number of mutations per replica (the execution can still be constrained by other settings).", 0) \\
@@ -200,14 +200,15 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
         return SelectPartsDecision::CANNOT_SELECT;
     }
 
-    //  第三步，选择要合并的part，调用查看 MergeTreeDataMergerMutator::selectPartsToMergeFromRanges
+    //  第三步，在range确定以后，选择要合并的part，调用查看 MergeTreeDataMergerMutator::selectPartsToMergeFromRanges
+    // 这个方法返回的一定是某一个Partition的需要合并的parts
     auto res = selectPartsToMergeFromRanges(future_part, aggressive, max_total_size_to_merge, merge_with_ttl_allowed,
                                             metadata_snapshot, info.parts_ranges, info.current_time, out_disable_reason);
 
     if (res == SelectPartsDecision::SELECTED) // 选好了，直接返回
         return res;
 
-    // 选择一个最适合进行优化的partition
+    // 如果没有成功选择一个PartsRange，那么，选择一个最优的partition，然后对这个partition进行merge
     String best_partition_id_to_optimize = getBestPartitionToOptimizeEntire(info.partitions_info);
     if (!best_partition_id_to_optimize.empty()) // 如果没有找到合适的分区
     {
@@ -244,7 +245,8 @@ MergeTreeDataMergerMutator::PartitionIdsHint MergeTreeDataMergerMutator::getPart
     bool merge_with_ttl_allowed,
     const MergeTreeTransactionPtr & txn) const
 {
-    PartitionIdsHint res;
+    PartitionIdsHint res; // 初始化结果集合
+    // MergeTreeDataMergerMutator::getDataPartsToSelectMergeFrom
     MergeTreeData::DataPartsVector data_parts = getDataPartsToSelectMergeFrom(txn);
     if (data_parts.empty())
         return res;
@@ -317,9 +319,10 @@ MergeTreeData::DataPartsVector MergeTreeDataMergerMutator::getDataPartsToSelectM
 MergeTreeData::DataPartsVector MergeTreeDataMergerMutator::getDataPartsToSelectMergeFrom(const MergeTreeTransactionPtr & txn) const
 {
     MergeTreeData::DataPartsVector res;
-    if (!txn)
+    if (!txn) // 如果txn是空的
     {
         /// Simply get all active parts
+        // 返回所有的part，只会选择active的part。 搜索 MergeTreeData::DataPartsVector MergeTreeData::getDataPartsVectorForInternalUsage(
         return data.getDataPartsVectorForInternalUsage();
     }
 
@@ -330,36 +333,37 @@ MergeTreeData::DataPartsVector MergeTreeDataMergerMutator::getDataPartsToSelectM
     /// If parts all_1_1_0 and all_3_3_0 are active and visible for merge transaction, then we would try to merge them.
     /// But it's wrong, because all_2_2_0 may become active again if transaction will roll back.
     /// That's why we must include some outdated parts into `data_part`, more precisely, such parts that removal is not committed.
-    MergeTreeData::DataPartsVector active_parts;
-    MergeTreeData::DataPartsVector outdated_parts;
+    MergeTreeData::DataPartsVector active_parts; // 活跃部分
+    MergeTreeData::DataPartsVector outdated_parts; // 过时部分
 
     {
         auto lock = data.lockParts();
+        // MergeTreeData::DataPartsVector MergeTreeData::getDataPartsVectorForInternalUsage(
         active_parts = data.getDataPartsVectorForInternalUsage({MergeTreeData::DataPartState::Active}, lock);
         outdated_parts = data.getDataPartsVectorForInternalUsage({MergeTreeData::DataPartState::Outdated}, lock);
     }
 
     ActiveDataPartSet active_parts_set{data.format_version};
-    for (const auto & part : active_parts)
+    for (const auto & part : active_parts) // 遍历所有的active part，添加到active_parts_set中
         active_parts_set.add(part->name);
 
-    for (const auto & part : outdated_parts)
+    for (const auto & part : outdated_parts) // 遍历所有的outdate part
     {
         /// We don't need rolled back parts.
         /// NOTE When rolling back a transaction we set creation_csn to RolledBackCSN at first
         /// and then remove part from working set, so there's no race condition
-        if (part->version.creation_csn == Tx::RolledBackCSN)
+        if (part->version.creation_csn == Tx::RolledBackCSN) // 如果部分已经回滚（creation_csn == Tx::RolledBackCSN），则跳过该部分。
             continue;
 
         /// We don't need parts that are finally removed.
         /// NOTE There's a minor race condition: we may get UnknownCSN if a transaction has been just committed concurrently.
         /// But it's not a problem if we will add such part to `data_parts`.
-        if (part->version.removal_csn != Tx::UnknownCSN)
+        if (part->version.removal_csn != Tx::UnknownCSN) // 如果部分已经标记为要删除（removal_csn != Tx::UnknownCSN），则也跳过。
             continue;
 
-        active_parts_set.add(part->name);
+        active_parts_set.add(part->name); // 将符合条件的部分添加到 active_parts_set 中，这意味着即使部分处于过时状态，只要它们的删除尚未最终确定，它们仍然可能被视为活跃部分。
     }
-
+    // 使用 remove_pred 函数对活跃和过时部分进行筛选，移除那些不再被 active_parts_set 认为是活跃的部分。这确保了只有当前确实可以合并的部分才会被保留下来。
     /// Restore "active" parts set from selected active and outdated parts
     auto remove_pred = [&](const MergeTreeData::DataPartPtr & part) -> bool
     {
@@ -399,10 +403,14 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
     const MergeTreeTransactionPtr & txn,
     String & out_disable_reason) const
 {
-    MergeSelectingInfo res;
+    MergeSelectingInfo res; // 初始化结果集 res:
 
     res.current_time = std::time(nullptr);
-
+    // using PartsRanges = std::vector<PartsRange>;
+    /**
+     * 例如: 如果一个分区 P1 有多个可以合并的部分（如 part_1 到 part_3，part_5 到 part_7），那么
+     * parts_ranges 可能会包含两个范围：[{part_1, part_2, part_3}, {part_5, part_6, part_7}]。
+    */
     IMergeSelector::PartsRanges & parts_ranges = res.parts_ranges;
 
     StoragePolicyPtr storage_policy = data.getStoragePolicy();
@@ -415,16 +423,17 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
     const MergeTreeData::DataPartPtr * prev_part = nullptr;
 
     /// collect min_age for each partition while iterating parts
-    PartitionsInfo & partitions_info = res.partitions_info;
+    // 搜索 struct PartitionInfo
+    PartitionsInfo & partitions_info = res.partitions_info; // 遍历过程中收集每一个partition的min_age
     // using DataPartPtr = std::shared_ptr<const DataPart>;
     // using DataPart = IMergeTreeDataPart;
-    for (const MergeTreeData::DataPartPtr & part : data_parts) // 遍历每一个
+    for (const MergeTreeData::DataPartPtr & part : data_parts) // 遍历每一个选择出来的parts
     {
-        const String & partition_id = part->info.partition_id;
-
-        if (!prev_partition_id || partition_id != *prev_partition_id) // 确定是否需要开始一个新的分区区间。如果分区 ID 发生变化，或当前区间为空，则开始新的区间。
+        const String & partition_id = part->info.partition_id; //  获取这个part的partition id
+        // 这里可以看到，PartsRanges中的每一个PartsRange一定属于同一个partition，不可能存在一个PartsRange中的不同的part属于不同的partition
+        if (!prev_partition_id || partition_id != *prev_partition_id) // 确定是否需要开始一个新的分区区间。如果分区 ID 发生变化，或当前区间为空，则开始新的区间PartsRange。
         {
-            if (parts_ranges.empty() || !parts_ranges.back().empty()) // 如果整个区间为空，或者整个区间不为空且最后一个区间也不为空，需要创建一个
+            if (parts_ranges.empty() || !parts_ranges.back().empty()) // 如果整个区间为空，或者整个区间不为空，且最后一个区间也不为空，需要创建一个
                 parts_ranges.emplace_back();
 
             /// New partition frame.
@@ -445,7 +454,7 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
             /// This part can be merged only with next parts (no prev part exists), so start
             /// new interval if previous was not empty.
             if (!parts_ranges.back().empty()) //  parts_ranges 中最后一个区间是否为空。如果该区间不为空，说明已有部分数据被添加到这个区间中。
-                parts_ranges.emplace_back(); // 如果最后一个区间不为空，使用 emplace_back() 向 parts_ranges 添加一个新的空区间
+                parts_ranges.emplace_back(); // 如果最后一个区间不为空，使用 emplace_back() 向 parts_ranges 添加一个新的空区间，即一个新的IMergeSelector::PartsRanges对象
         }
         else // 这不是当前partition的第一个part
         {
@@ -467,13 +476,13 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
                     continue; // 检查当前部分是否可以单独合并（即不与前一个部分合并）。如果不能单独合并，则跳过当前循环的剩余部分，不处理这个part
                 // 执行到这里，意味着这个part不能与前面的part合并，但是可以与自己和后续的部分合并
                 /// Starting new interval in the same partition
-                parts_ranges.emplace_back();// 在partition内部开始一个新的interval
+                parts_ranges.emplace_back();// 在partition内部开始一个新的区间，即一个新的IMergeSelector::PartsRanges对象
             }
         }
 
         IMergeSelector::Part part_info;
         part_info.size = part->getBytesOnDisk();
-        part_info.age = res.current_time - part->modification_time;
+        part_info.age = res.current_time - part->modification_time; // 这个part的修改距离当前时间
         part_info.level = part->info.level;
         part_info.data = &part;
         part_info.ttl_infos = &part->ttl_infos;
@@ -481,10 +490,13 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
         part_info.shall_participate_in_merges = has_volumes_with_disabled_merges ? part->shallParticipateInMerges(storage_policy) : true;
 
         auto & partition_info = partitions_info[partition_id];
-        partition_info.min_age = std::min(partition_info.min_age, part_info.age);
+        partition_info.min_age = std::min(partition_info.min_age, part_info.age); // 重算最小的age
 
         ++res.parts_selected_precondition;
-
+        /**
+         * back() 方法返回 parts_ranges 中的最后一个区间（即最后一个 IMergeSelector::PartsRanges 对象）。
+         * 如果 parts_ranges 是一个二维数组，那么 parts_ranges.back() 就表示这个二维数组的最后一行。
+         */
         parts_ranges.back().emplace_back(part_info); //往结果中插入数据
 
         /// Check for consistency of data parts. If assertion is failed, it requires immediate investigation.
@@ -505,7 +517,7 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
 
 /**
  * 调用者 MergeTreeDataMergerMutator::selectPartsToMerge
- * @param future_part
+ * @param future_part 在方法调用完成以后，将选定的某一个partition的part存放到future_part中
  * @param aggressive
  * @param max_total_size_to_merge
  * @param merge_with_ttl_allowed
@@ -519,19 +531,22 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
 SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
     FutureMergedMutatedPartPtr future_part,
     bool aggressive,
-    size_t max_total_size_to_merge,
+    size_t max_total_size_to_merge, // 当前计算好的最大可合并的part数量
     bool merge_with_ttl_allowed,
     const StorageMetadataPtr & metadata_snapshot,
-    const IMergeSelector::PartsRanges & parts_ranges,
+    //  using PartsRanges = std::vector<PartsRange>;
+    const IMergeSelector::PartsRanges & parts_ranges, // 已经计算好的part rage.
     const time_t & current_time,
     String & out_disable_reason,
     bool dry_run)
 {
     const auto data_settings = data.getSettings();
-    IMergeSelector::PartsRange parts_to_merge;
-
+    IMergeSelector::PartsRange parts_to_merge; // 初始化一个空的 parts_to_merge 容器，用于存储选择出的可合并部分。
+    // 首先检查是否有任何 TTL 相关的合并需要执行（例如删除过期数据或者重新压缩数据）。
     if (metadata_snapshot->hasAnyTTL() && merge_with_ttl_allowed && !ttl_merges_blocker.isCancelled())
     {
+        // 使用 TTLDeleteMergeSelector 或 TTLRecompressMergeSelector 来选择适合的part进行合并。
+        // 如果找到了符合条件的part，就直接将这些part标记为需要 TTL 相关的合并，并将其返回。
         /// TTL delete is preferred to recompression
         TTLDeleteMergeSelector drop_ttl_selector(
                 next_delete_ttl_merge_times_by_partition,
@@ -579,18 +594,33 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
     {
         SimpleMergeSelector::Settings merge_settings;
         /// Override value from table settings
+        /**
+         *     M(UInt64, max_parts_to_merge_at_once, 100, "Max amount of parts which can be merged at once (0 - disabled).
+         *     Doesn't affect OPTIMIZE FINAL query.", 0) \
+         *     最大可以在一个合并中进行的 source parts 的数量。但是如果是来自于OPTIMIZE，这个值会被忽略
+         */
         merge_settings.max_parts_to_merge_at_once = data_settings->max_parts_to_merge_at_once;
+        /**
+         *     M(Bool, min_age_to_force_merge_on_partition_only, false, "Whether min_age_to_force_merge_seconds should be
+         *     applied only on the entire partition and not on subset.", false) \
+         *
+         */
         if (!data_settings->min_age_to_force_merge_on_partition_only)
+            /**
+             *     M(UInt64, min_age_to_force_merge_seconds, 0, "If all parts in a certain range are older than this value,
+             *     range will be always eligible for merging. Set to 0 to disable.", 0) \
+             */
             merge_settings.min_age_to_force_merge = data_settings->min_age_to_force_merge_seconds;
 
         if (aggressive)
-            merge_settings.base = 1;
-
+            merge_settings.base = 1; // 如果是aggressive，那么设置base = 1
+        // 进行常规合并. IMergeSelector::PartsRange parts_to_merge
+        // SimpleMergeSelector::PartsRange SimpleMergeSelector::select
         parts_to_merge = SimpleMergeSelector(merge_settings)
-                            .select(parts_ranges, max_total_size_to_merge);
+                            .select(parts_ranges, max_total_size_to_merge); // 从众多的PartsRange中选择一个最优的PartsRange(一个PartsRange只属于一个Partition)
 
         /// Do not allow to "merge" part with itself for regular merges, unless it is a TTL-merge where it is ok to remove some values with expired ttl
-        if (parts_to_merge.size() == 1)
+        if (parts_to_merge.size() == 1) // 这个PartsRange中只有一个part
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Logical error: merge selector returned only one part to merge");
 
         if (parts_to_merge.empty())
@@ -613,16 +643,42 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
     return SelectPartsDecision::SELECTED;
 }
 
+/**
+ * 当我们无法在众多的PartsRanges中选择出一个合适的PartsRange进行合并，那么，我们尝试在这些parts所属的Partition中选择一个Partition进行optimize
+ * @param partitions_info
+ * @return
+ */
 String MergeTreeDataMergerMutator::getBestPartitionToOptimizeEntire(
     const PartitionsInfo & partitions_info) const
 {
     const auto & data_settings = data.getSettings();
+    /**
+     *     M(Bool, min_age_to_force_merge_on_partition_only, false, "Whether min_age_to_force_merge_seconds should be
+     *     applied only on the entire partition and not on subset.", false) \
+     */
     if (!data_settings->min_age_to_force_merge_on_partition_only)
         return {};
+    /**
+     * M(UInt64, min_age_to_force_merge_seconds, 0, "If all parts in a certain range are older than this value,
+     * range will be always eligible for merging. Set to 0 to disable.", 0) \
+     * 可以进行partition内部的force merge的最小年龄。年龄必须大于这个值才能进行force merge
+     */
     if (!data_settings->min_age_to_force_merge_seconds)
         return {};
+    // 当前pending + active中的task的数量
     size_t occupied = CurrentMetrics::values[CurrentMetrics::BackgroundMergesAndMutationsPoolTask].load(std::memory_order_relaxed);
+    /**
+     * 最大任务数量，即给active/pending队列的各自的capacity，这里默认是32
+     */
     size_t max_tasks_count = data.getContext()->getMergeMutateExecutor()->getMaxTasksCount();
+    /**
+     *     M(UInt64, number_of_free_entries_in_pool_to_execute_optimize_entire_partition, 25,
+     *     "When there is less than specified number of free entries in pool,
+     *     do not try to execute optimize entire partition with
+     *     a merge (this merge is created when set min_age_to_force_merge_seconds > 0 and min_age_to_force_merge_on_partition_only = true).
+     *     This is to leave free threads for regular merges and avoid \"Too many parts\"", 0) \
+     *     需要区分 data_settings->number_of_free_entries_in_pool_to_execute_mutation
+     */
     if (occupied > 1 && max_tasks_count - occupied < data_settings->number_of_free_entries_in_pool_to_execute_optimize_entire_partition)
     {
         LOG_INFO(
@@ -632,14 +688,15 @@ String MergeTreeDataMergerMutator::getBestPartitionToOptimizeEntire(
             "and 'background_pool_size'");
         return {};
     }
-
+    // 对于每一个PartitionInfo，min_age是这个PartitionInfo下面的所有part最小的age
+    // 这里，是选择min_age最大的partition，即还是prefer大龄的age的Partition进行合并
     auto best_partition_it = std::max_element(
         partitions_info.begin(),
         partitions_info.end(),
         [](const auto & e1, const auto & e2) { return e1.second.min_age < e2.second.min_age; });
 
     assert(best_partition_it != partitions_info.end());
-
+    // 如果即使年龄最大的partition的年龄也小于min_age_to_force_merge_seconds，那么显然做不了。
     if (static_cast<size_t>(best_partition_it->second.min_age) < data_settings->min_age_to_force_merge_seconds)
         return {};
 

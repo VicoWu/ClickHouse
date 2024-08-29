@@ -94,8 +94,9 @@ public:
     struct MergeSelectingInfo
     {
         time_t current_time;
-        PartitionsInfo partitions_info;
-        IMergeSelector::PartsRanges parts_ranges;
+        PartitionsInfo partitions_info; // 包含了对应的可以合并的part的集合
+        // using PartsRanges = std::vector<PartsRange>;
+        IMergeSelector::PartsRanges parts_ranges; // 进行合并以后的每一个part rage
         size_t parts_selected_precondition = 0;
     };
 

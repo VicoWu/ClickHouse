@@ -91,6 +91,7 @@ double mapPiecewiseLinearToUnit(double value, double min, double max)
 
 
 /** Is allowed to merge parts in range with specific properties.
+ * part两两组合，进行判断是否允许合并
   */
 bool allow(
     double sum_size,
@@ -102,6 +103,7 @@ bool allow(
     double max_size_to_lower_base_log,
     const SimpleMergeSelector::Settings & settings)
 {
+    // 如果 min_age_to_force_merge = true，并且两个part中即使最年轻的part的age也大于min_age_to_force_merge，那么无条件合并
     if (settings.min_age_to_force_merge && min_age >= settings.min_age_to_force_merge)
         return true;
 
@@ -146,7 +148,7 @@ bool allow(
 
 
 void selectWithinPartition(
-    const SimpleMergeSelector::PartsRange & parts,
+    const SimpleMergeSelector::PartsRange & parts, // 这个partition的所有part
     const size_t max_total_size_to_merge,
     Estimator & estimator,
     const SimpleMergeSelector::Settings & settings,
@@ -177,7 +179,7 @@ void selectWithinPartition(
 
         size_t sum_size = parts[begin].size;
         size_t max_size = parts[begin].size;
-        size_t min_age = parts[begin].age;
+        size_t min_age = parts[begin].age; // 当前的age
 
         for (size_t end = begin + 2; end <= parts_count; ++end)
         {
@@ -192,8 +194,8 @@ void selectWithinPartition(
             size_t cur_age = parts[end - 1].age;
 
             sum_size += cur_size;
-            max_size = std::max(max_size, cur_size);
-            min_age = std::min(min_age, cur_age);
+            max_size = std::max(max_size, cur_size); //
+            min_age = std::min(min_age, cur_age); // 取age的较小值
 
             if (max_total_size_to_merge && sum_size > max_total_size_to_merge)
                 break;
@@ -212,7 +214,21 @@ void selectWithinPartition(
 }
 
 
+/**
+ * 方法在给定的一组分区范围（parts_ranges）中选择最佳的要合并的PartsRange
+ * 该方法用于优化合并操作，以减少 ClickHouse 数据库中部分数量，进而提升查询性能。
+* @param parts_ranges
+ * @param max_total_size_to_merge
+ * @return
+ */
 SimpleMergeSelector::PartsRange SimpleMergeSelector::select(
+    /**
+    Parts are belong to partitions. Only parts within same partition could be merged.
+    using PartsRange = std::vector<Part>;
+
+    Parts are in some specific order. Parts could be merged only in contiguous ranges.
+    using PartsRanges = std::vector<PartsRange>;
+     */
     const PartsRanges & parts_ranges,
     size_t max_total_size_to_merge)
 {
@@ -222,7 +238,8 @@ SimpleMergeSelector::PartsRange SimpleMergeSelector::select(
     const double min_size_to_lower_base_log = log(1 + settings.min_size_to_lower_base);
     const double max_size_to_lower_base_log = log(1 + settings.max_size_to_lower_base);
 
-    for (const auto & part_range : parts_ranges)
+    for (const auto & part_range : parts_ranges) // 对于每一个parts range，试图找到一个最佳的PartsRange
+        // 遍历每一个PartsRange，将结果存放到estimator中，然后选择一个最佳的PartsRange
         selectWithinPartition(part_range, max_total_size_to_merge, estimator, settings, min_size_to_lower_base_log, max_size_to_lower_base_log);
 
     return estimator.getBest();

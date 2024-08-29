@@ -27,7 +27,10 @@ void ReplicatedMergeMutateTaskBase::onCompleted()
     task_result_callback(successfully_executed);
 }
 
-
+/**
+ * 调用者 void MergeTreeBackgroundExecutor<Queue>::routine
+ * @return
+ */
 bool ReplicatedMergeMutateTaskBase::executeStep()
 {
     /// Metrics will be saved in the local profile_counters.
@@ -43,7 +46,7 @@ bool ReplicatedMergeMutateTaskBase::executeStep()
 
         try
         {
-            return executeImpl();
+            return executeImpl(); // bool ReplicatedMergeMutateTaskBase::executeImpl()
         }
         catch (const Exception & e)
         {
@@ -140,7 +143,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
     {
         try
         {
-            storage.queue.removeProcessedEntry(storage.getZooKeeper(), selected_entry->log_entry);
+            storage.queue.removeProcessedEntry(storage.getZooKeeper(), selected_entry->log_entry); // 从queue中删除这个entry(也会从zookeeper上删除)
             state = State::SUCCESS;
         }
         catch (...)
@@ -187,7 +190,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
         {
             try
             {
-                if (!executeInnerTask())
+                if (!executeInnerTask()) // 真正执行
                 {
                     state = State::NEED_FINALIZE;
                     return true;
@@ -215,7 +218,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
                     part_log_writer(ExecutionStatus::fromCurrentException("", true));
                 throw;
             }
-
+            // 执行完成以后才会删除
             return remove_processed_entry();
         }
         case State::SUCCESS :

@@ -3490,6 +3490,9 @@ void StorageReplicatedMergeTree::mutationsUpdatingTask()
     }
 }
 
+/**
+ * 从queue中peak一个LogEntry，但是不会从queue中删除
+ */
 ReplicatedMergeTreeQueue::SelectedEntryPtr StorageReplicatedMergeTree::selectQueueEntry()
 {
     /// This object will mark the element of the queue as running.
@@ -3513,6 +3516,7 @@ ReplicatedMergeTreeQueue::SelectedEntryPtr StorageReplicatedMergeTree::selectQue
 bool StorageReplicatedMergeTree::processQueueEntry(ReplicatedMergeTreeQueue::SelectedEntryPtr selected_entry)
 {
     LogEntryPtr & entry = selected_entry->log_entry;
+    // 这里会执行，执行成功就会从queue中删除。搜索 bool ReplicatedMergeTreeQueue::processEntry(
     return queue.processEntry([this]{ return getZooKeeper(); }, entry, [&](LogEntryPtr & entry_to_process)
     {
         try
@@ -3689,16 +3693,16 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         /// If many merges is already queued, then will queue only small enough merges.
         /// Otherwise merge queue could be filled with only large merges,
         /// and in the same time, many small parts could be created and won't be merged.
-        // 检查当前是否可以执行新的后台任务，如果队列中的合并任务数量已经达到上限，则返回 AttemptStatus::Limited，表示任务受限。
+        // 检查当前是否可以执行新的后台任务，如果队列中的合并和mutate任务数量(还没开始执行或者正在执行)已经达到上限，则返回 AttemptStatus::Limited，表示任务受限。
         auto merges_and_mutations_queued = queue.countMergesAndPartMutations();
         size_t merges_and_mutations_sum = merges_and_mutations_queued.merges + merges_and_mutations_queued.mutations;
-        if (!canEnqueueBackgroundTask()) // 查看内存是否超过限制
+        if (!canEnqueueBackgroundTask()) // 查看内存是否超过限制 merges_mutations_memory_usage_soft_limit 和 merges_mutations_memory_usage_to_ram_ratio
         {
             LOG_TRACE(log, "Reached memory limit for the background tasks ({}), so won't select new parts to merge or mutate."
                 "Current background tasks memory usage: {}.",
                 formatReadableSizeWithBinarySuffix(background_memory_tracker.getSoftLimit()),
                 formatReadableSizeWithBinarySuffix(background_memory_tracker.get()));
-            return AttemptStatus::Limited;
+            return AttemptStatus::Limited; // 资源受限
         }
         /**
          *     M(UInt64, max_replicated_merges_in_queue, 1000,
@@ -3708,8 +3712,8 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         {
             LOG_TRACE(log, "Number of queued merges ({}) and part mutations ({})"
                 " is greater than max_replicated_merges_in_queue ({}), so won't select new parts to merge or mutate.",
-                merges_and_mutations_queued.merges,
-                merges_and_mutations_queued.mutations,
+                merges_and_mutations_queued.merges, // 最大1000
+                merges_and_mutations_queued.mutations, // 最大8
                 storage_settings_ptr->max_replicated_merges_in_queue);
             return AttemptStatus::Limited;
         }
@@ -3728,12 +3732,13 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         if (storage_settings.get()->assign_part_uuids)
             future_merged_part->uuid = UUIDHelpers::generateV4();
 
-        bool can_assign_merge = max_source_parts_size_for_merge > 0;
+        bool can_assign_merge = max_source_parts_size_for_merge > 0; //只要计算得到的允许的merge size大于0，就可以尝试merge
         PartitionIdsHint partitions_to_merge_in;
         if (can_assign_merge) // 可以merge
         {
             auto lightweight_merge_pred = LocalMergePredicate(queue); // 创建 LocalMergePredicate 对象，判断哪些数据分区可以被合并
             partitions_to_merge_in = merger_mutator.getPartitionsThatMayBeMerged( // 快速获取可能被合并的分区列表
+                // 传入的是一个空的transaction
                 max_source_parts_size_for_merge, lightweight_merge_pred, merge_with_ttl_allowed, NO_TRANSACTION_PTR);
             if (partitions_to_merge_in.empty()) // 列表为空
                 can_assign_merge = false; // 重新设置can_assign_merge = false，不会进行merge操作
@@ -3773,7 +3778,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         // 可以看到，如果本轮可以merge，就不会再尝试进行mutation
         /// If there are many mutations in queue, it may happen, that we cannot enqueue enough merges to merge all new parts
         if (max_source_part_size_for_mutation == 0 || merges_and_mutations_queued.mutations >= storage_settings_ptr->max_replicated_mutations_in_queue)
-            return AttemptStatus::Limited; // 次数受限，lambda返回
+            return AttemptStatus::Limited; // 次数受限，lambda返回, max_replicated_mutations_in_queue 默认为8
 
         if (queue.countMutations() > 0) // 如果的确有mutation的任务
         {

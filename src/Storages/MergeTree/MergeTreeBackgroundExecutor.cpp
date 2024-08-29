@@ -226,6 +226,7 @@ void MergeTreeBackgroundExecutor<Queue>::removeTasksCorrespondingToStorage(Stora
 
 /**
  * routine()方法负责实际执行任务，并处理任务完成或重新调度的逻辑。
+ * 在MergeTreeBackgroundExecutor<Queue>::threadFunction()中调用
  */
 template <class Queue>
 void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
@@ -234,7 +235,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     DENY_ALLOCATIONS_IN_SCOPE;
 
     /// All operations with queues are considered no to do any allocations
-
+    // 从active中删除
     auto erase_from_active = [this](TaskRuntimeDataPtr & item_) TSA_REQUIRES(mutex)
     {
         active.erase(std::remove(active.begin(), active.end(), item_), active.end());
@@ -262,7 +263,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
         /// Not to own the object it points to.
         /// Otherwise the destruction of the task won't be ordered with the destruction of the
         /// storage.
-        pending.push(std::move(item_));
+        pending.push(std::move(item_)); // 重新回到pending
         has_tasks.notify_one();
     };
 
@@ -272,7 +273,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     {
         std::lock_guard guard(mutex);
 
-        erase_from_active(item_);
+        erase_from_active(item_); // 从active中删除
         has_tasks.notify_one();
 
         try
@@ -297,7 +298,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     {
         ALLOW_ALLOCATIONS_IN_SCOPE;
         query_id = item->task->getQueryId();
-        need_execute_again = item->task->executeStep(); // 调用对应task的executeStep()方法
+        need_execute_again = item->task->executeStep(); // 调用对应task的executeStep()方法，bool ReplicatedMergeMutateTaskBase::executeStep()
     }
     catch (...)
     {
@@ -312,6 +313,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
 
     if (!need_execute_again) // 不需要重新执行
     {   // 如果任务不需要再次执行，routine()会调用release_task(std::move(item));方法，释放该任务，标记任务为完成。
+        // 这里会从active 和 queue中删除
         release_task(std::move(item));
         return;
     }
@@ -342,7 +344,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
 
 
 /**
- * 在MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor中不断被调度
+ * 在MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor的独立线程池中不断被调度
  * 每个线程会执行一个threadFunction
  * @tparam Queue
  */
@@ -366,10 +368,11 @@ void MergeTreeBackgroundExecutor<Queue>::threadFunction()
                     break;
 
                 item = std::move(pending.pop());
-                active.push_back(item);
+                active.push_back(item); // 执行以前，先从pending添加到active
             }
-            // 一旦有新任务进入pending队列，线程会从pending队列中弹出一个任务，并将其移动到active队列中。这一步骤确保任务从pending到active的状态转换。然后，线程调用routine(std::move(item));来执行任务。
-            routine(std::move(item));
+            // 一旦有新任务进入pending队列，线程会从pending队列中弹出一个任务，并将其移动到active队列中。
+            // 这一步骤确保任务从pending到active的状态转换。然后，线程调用routine(std::move(item));来执行任务。
+            routine(std::move(item)); // void MergeTreeBackgroundExecutor<Queue>::routine
         }
         catch (...)
         {

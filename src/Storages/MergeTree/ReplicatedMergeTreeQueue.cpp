@@ -506,7 +506,9 @@ void ReplicatedMergeTreeQueue::updateTimesInZooKeeper(
     }
 }
 
-
+/**
+ * 从本地的queue和zookeeper上的queue中同时删除掉这个LogEntry
+ */
 void ReplicatedMergeTreeQueue::removeProcessedEntry(zkutil::ZooKeeperPtr zookeeper, LogEntryPtr & entry)
 {
     std::optional<time_t> min_unprocessed_insert_time_changed;
@@ -556,7 +558,7 @@ void ReplicatedMergeTreeQueue::removeProcessedEntry(zkutil::ZooKeeperPtr zookeep
 
     if (!need_remove_from_zk)
         return;
-
+    // 从zookeeper的queue中删除
     auto code = zookeeper->tryRemove(fs::path(replica_path) / "queue" / entry->znode_name);
     if (code != Coordination::Error::ZOK)
         LOG_ERROR(log, "Couldn't remove {}/queue/{}: {}. This shouldn't happen often.", replica_path, entry->znode_name, code);
@@ -1744,7 +1746,7 @@ bool ReplicatedMergeTreeQueue::processEntry(
         /// We don't have any backoff for failed entries
         /// we just count amount of tries for each of them.
         if (func(entry))
-            removeProcessedEntry(get_zookeeper(), entry);
+            removeProcessedEntry(get_zookeeper(), entry); // 从queue中删除
     }
     catch (...)
     {
@@ -1764,6 +1766,7 @@ bool ReplicatedMergeTreeQueue::processEntry(
 
 /**
  * 遍历ReplicatedMergeTreeQueue的本地queue
+ * 我们看到，一个task只有当执行结束才会从queue中删除，所以，这里的queue的含义是没有执行完成(或者还没开始执行)的所有的task
  * @return
  */
 ReplicatedMergeTreeQueue::OperationsInQueue ReplicatedMergeTreeQueue::countMergesAndPartMutations() const
@@ -1773,6 +1776,7 @@ ReplicatedMergeTreeQueue::OperationsInQueue ReplicatedMergeTreeQueue::countMerge
     size_t count_merges = 0;
     size_t count_mutations = 0;
     size_t count_merges_with_ttl = 0;
+    // 我们看到，一个task只有当执行结束才会从queue中删除，所以，这里的queue的含义是没有执行完成(或者还没开始执行)的所有的task
     for (const auto & entry : queue) // 这是ReplicatedMergeTreeQueue的本地queue， using Queue = std::list<LogEntryPtr>;
     {
         if (entry->type == ReplicatedMergeTreeLogEntry::MERGE_PARTS)

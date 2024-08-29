@@ -1293,9 +1293,9 @@ try
             total_memory_tracker.setMetric(CurrentMetrics::MemoryTracking);
 
             size_t merges_mutations_memory_usage_soft_limit = server_settings_.merges_mutations_memory_usage_soft_limit;
-
+            // 当前按照 merges_mutations_memory_usage_to_ram_ratio 计算得到的可用物理内存
             size_t default_merges_mutations_server_memory_usage = static_cast<size_t>(current_physical_server_memory * server_settings_.merges_mutations_memory_usage_to_ram_ratio);
-            if (merges_mutations_memory_usage_soft_limit == 0)
+            if (merges_mutations_memory_usage_soft_limit == 0) // 默认是0，即没有配置
             {
                 merges_mutations_memory_usage_soft_limit = default_merges_mutations_server_memory_usage;
                 LOG_INFO(log, "Setting merges_mutations_memory_usage_soft_limit was set to {}"
@@ -1304,9 +1304,10 @@ try
                     formatReadableSizeWithBinarySuffix(current_physical_server_memory),
                     server_settings_.merges_mutations_memory_usage_to_ram_ratio);
             }
+            // 如果配置了limit，并且limit的值大于ram_ratio计算得到的值
             else if (merges_mutations_memory_usage_soft_limit > default_merges_mutations_server_memory_usage)
             {
-                merges_mutations_memory_usage_soft_limit = default_merges_mutations_server_memory_usage;
+                merges_mutations_memory_usage_soft_limit = default_merges_mutations_server_memory_usage; // 使用较小值
                 LOG_WARNING(log, "Setting merges_mutations_memory_usage_soft_limit was set to {}"
                     " ({} available * {:.2f} merges_mutations_memory_usage_to_ram_ratio)",
                     formatReadableSizeWithBinarySuffix(merges_mutations_memory_usage_soft_limit),

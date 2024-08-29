@@ -5878,6 +5878,7 @@ MergeTreeData::DataPartsVector MergeTreeData::getDataPartsVectorForInternalUsage
     DataPartsVector res;
     DataPartsVector buf;
 
+    // 获取所有状态的part
     for (auto state : affordable_states)
     {
         auto range = getDataPartsStateRange(state);
