@@ -52,6 +52,15 @@ using MergeTaskPtr = std::shared_ptr<MergeTask>;
  * So, if ClickHouse wants to merge some really big parts into a bigger part,
  * then it will be executed for a long time, because the result of the merge is not really needed immediately.
  * It is better to merge small parts as soon as possible.
+ *
+ * 合并算法概述
+每个合并操作是按block顺序执行的。主要思想是将合并操作设计成一个协程，而不是一个线程池中的子程序，这样可以在某些点暂停执行，然后从该点恢复执行。
+
+合适的暂停点： 一个理想的暂停点是在处理完一个块之后。任务本身将通过 BackgroundJobExecutor 执行。
+        任务接口：
+            主要方法是 execute()，如果任务希望再次执行则返回 true，否则返回 false。
+    优先级： 通过这种任务方式，我们可以给合并操作设定优先级。优先级很简单——合并的大小越小，优先级越高。
+    因此，如果 ClickHouse 需要将一些非常大的部分合并成一个更大的部分，这个操作可能会执行很长时间，因为合并的结果并不需要立即使用。相反，尽快合并小的部分是更好的选择。
 */
 class MergeTask
 {

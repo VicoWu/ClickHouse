@@ -14,8 +14,13 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
 }
 
+/**
+ * 初始化 PullingPipelineExecutor 对象，并设置管道的输出格式为 PullingOutputFormat。如果管道不支持拉取模式，则抛出异常。
+ * @param pipeline_
+ */
 PullingPipelineExecutor::PullingPipelineExecutor(QueryPipeline & pipeline_) : pipeline(pipeline_)
 {
+    // 构造的时候，这个Pipeline不应该已经处于pulling的状态
     if (!pipeline.pulling())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Pipeline for PullingPipelineExecutor must be pulling");
 
@@ -40,9 +45,14 @@ const Block & PullingPipelineExecutor::getHeader() const
     return pulling_format->getPort(IOutputFormat::PortKind::Main).getHeader();
 }
 
+/**
+ * 从管道中拉取数据块放入到chunk中。如果执行成功，则返回 true，否则返回 false。
+ * @param chunk
+ * @return
+ */
 bool PullingPipelineExecutor::pull(Chunk & chunk)
 {
-    if (!executor)
+    if (!executor) // 如果还没有executor，则通过传入的QueryPipeline，构造对应的 PipelineExecutor
     {
         executor = std::make_shared<PipelineExecutor>(pipeline.processors, pipeline.process_list_element);
         executor->setReadProgressCallback(pipeline.getReadProgressCallback());
@@ -50,14 +60,24 @@ bool PullingPipelineExecutor::pull(Chunk & chunk)
 
     if (!executor->checkTimeLimitSoft())
         return false;
-
+    // PipelineExecutor::executeStep
+    // 这是单线程执行的模式
     if (!executor->executeStep(&has_data_flag))
         return false;
 
-    chunk = pulling_format->getChunk();
+    chunk = pulling_format->getChunk(); // 获取对应的chunk作为参数返回
     return true;
 }
 
+/**
+ * 从管道中拉取一个数据块，并将其转换为 Block 类型。
+ * 在 MergeTask::ExecuteAndFinalizeHorizontalPart::executeImpl()
+ * 和 MergeTask::VerticalMergeStage::executeVerticalMergeForOneColumn()
+ * 中调用
+ * 以及在
+ * @param block
+ * @return
+ */
 bool PullingPipelineExecutor::pull(Block & block)
 {
     Chunk chunk;

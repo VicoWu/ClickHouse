@@ -28,10 +28,10 @@ bool BackgroundSchedulePoolTaskInfo::schedule()
 {
     std::lock_guard lock(schedule_mutex);
     // 如果这个BackgroundSchedulePoolTaskInfo 是 deactivated或者scheduled状态，不再调度
-    if (deactivated || scheduled)
+    if (deactivated || scheduled) // 由于很多地方都可以触发，但是同时只运行一次
         return false;
     // void BackgroundSchedulePoolTaskInfo::scheduleImpl
-    scheduleImpl(lock); // 将这个task放在对应的BackgroundSchedulePool中执行
+    scheduleImpl(lock); // 将这个task放在对应的BackgroundSchedulePool中执行，一旦运行，scheduled=true
     return true;
 }
 
@@ -39,7 +39,7 @@ bool BackgroundSchedulePoolTaskInfo::scheduleAfter(size_t milliseconds, bool ove
 {
     std::lock_guard lock(schedule_mutex);
 
-    if (deactivated || scheduled)
+    if (deactivated || scheduled) //  只有 deactivated = false, 并且 scheduled = false 才有可能运行scheduleAfter。因为每次任务执行结束，就会将scheduled置为false
         return false;
     if (delayed && !overwrite) // 已经被延迟调度 (delayed == true)，并且 overwrite 参数为 false，则方法返回 false，表示不会重新调度任务。
         return false;
@@ -88,6 +88,9 @@ std::unique_lock<std::mutex> BackgroundSchedulePoolTaskInfo::getExecLock()
     return std::unique_lock{exec_mutex};
 }
 
+/**
+ * 在 void BackgroundJobsAssignee::start() 中调用
+ */
 void BackgroundSchedulePoolTaskInfo::execute()
 {
     Stopwatch watch;
@@ -100,14 +103,15 @@ void BackgroundSchedulePoolTaskInfo::execute()
 
         if (deactivated)
             return;
-        // 设置任务调度状态标记为false,如果任务执行期间没有其它地方重新执行schedule()，那么这里执行完了就不会再调度
+        // 设置任务调度状态标记为false，如果任务执行期间没有其它地方重新执行schedule()，那么这里执行完了就不会再调度
         scheduled = false;
         executing = true;
     }
 
     try
     {
-        function(); // 执行任务
+        function(); // 执行任务，这里的function的定义是在void BackgroundJobsAssignee::start() 中定义给
+        // BackgroundJobsAssignee 对象和对应的taskinfo的，调用的实际上是 void BackgroundJobsAssignee::threadFunc()
     }
     catch (...)
     {
@@ -156,7 +160,7 @@ void BackgroundSchedulePoolTaskInfo::scheduleImpl(std::lock_guard<std::mutex> & 
         void BackgroundSchedulePool::scheduleTask(TaskInfoPtr task_info)
      */
     if (!executing)
-        // 这里的Pool是 BackgroundSchedulePool，不是真正的线程池ThreadPool
+        // 这里的Pool是BackgroundSchedulePool，不是真正的线程池ThreadPool
         pool.scheduleTask(shared_from_this()); // shared_from_this()代表当前的 BackgroundSchedulePoolTaskInfo 对象
 }
 
@@ -259,7 +263,7 @@ void BackgroundSchedulePool::scheduleTask(TaskInfoPtr task_info)
 {
     {
         std::lock_guard tasks_lock(tasks_mutex);
-        tasks.push_back(std::move(task_info)); //将任务推送到tasks中
+        tasks.push_back(std::move(task_info)); // 将任务推送到tasks中，tasks将会在 void BackgroundSchedulePool::threadFunction() 中取出来执行
     }
 
     tasks_cond_var.notify_one();
@@ -295,6 +299,9 @@ void BackgroundSchedulePool::cancelDelayedTask(const TaskInfoPtr & task, std::lo
 }
 
 
+/**
+ * 区别于 void MergeTreeBackgroundExecutor<Queue>::threadFunction()
+ */
 void BackgroundSchedulePool::threadFunction()
 {
     setThreadName(thread_name.c_str());
@@ -314,7 +321,7 @@ void BackgroundSchedulePool::threadFunction()
 
             if (!tasks.empty())
             {
-                task = tasks.front();
+                task = tasks.front(); // 取出task
                 tasks.pop_front();
             }
         }

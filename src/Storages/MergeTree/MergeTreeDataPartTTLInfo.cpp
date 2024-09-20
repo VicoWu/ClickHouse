@@ -239,6 +239,11 @@ time_t MergeTreeDataPartTTLInfos::getMinimalMaxRecompressionTTL() const
     return max;
 }
 
+/**
+ * 该方法通过检查数据分片中不同类型的 TTL 信息（如表级 TTL、列级 TTL、行级 TTL 等），判断这些 TTL 是否已经完成（即数据是否已经过期）
+ * 如果任何一种 TTL 还未完成（即存在任何一条未过期的数据），方法就会返回 true。如果都完成，则返回false
+ * @return
+ */
 bool MergeTreeDataPartTTLInfos::hasAnyNonFinishedTTLs() const
 {
     auto has_non_finished_ttl = [] (const TTLInfoMap & map) -> bool

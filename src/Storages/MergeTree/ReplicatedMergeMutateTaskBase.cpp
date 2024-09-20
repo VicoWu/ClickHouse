@@ -29,6 +29,8 @@ void ReplicatedMergeMutateTaskBase::onCompleted()
 
 /**
  * 调用者 void MergeTreeBackgroundExecutor<Queue>::routine
+ * 该方法返回的是 need_execute_again = item->task->executeStep();
+ * 即返回true代表需要重新执行(可能是执行下一个state -> stage -> mini-task)，返回false不需要重新执行(最后一个State的最后一个Stage的最后一个mini-task)
  * @return
  */
 bool ReplicatedMergeMutateTaskBase::executeStep()
@@ -75,7 +77,7 @@ bool ReplicatedMergeMutateTaskBase::executeStep()
             /// This exception will be written to the queue element, and it can be looked up using `system.replication_queue` table.
             /// The thread that performs this action will sleep a few seconds after the exception.
             /// See `queue.processEntry` function.
-            throw;
+            throw; // 抛出异常，继续执行
         }
         catch (...)
         {
@@ -84,11 +86,12 @@ bool ReplicatedMergeMutateTaskBase::executeStep()
         }
 
     }
+    // 抛出异常，继续执行下面的逻辑
     catch (...)
     {
         saved_exception = std::current_exception();
     }
-
+    // 执行到这里，肯定是抛出异常了，这里查看是否是可重试的error
     if (!retryable_error && saved_exception)
     {
         std::lock_guard lock(storage.queue.state_mutex);
@@ -123,22 +126,26 @@ bool ReplicatedMergeMutateTaskBase::executeStep()
         }
     }
 
-    if (retryable_error)
+    if (retryable_error) // 可重试的error
         print_exception = false;
 
     if (saved_exception)
         std::rethrow_exception(saved_exception);
 
-    return false;
+    return false; // 不需要重新执行，也就是说这个大的task现在宣告失败，不会再占用当前的Slot。如果有需要，后面会重新生成task
 }
 
-
+/**
+ * 调用者是 ReplicatedMergeMutateTaskBase::executeStep()。而executeStep()直接返回了该方法的返回结果，结果代表是否需要重新执行
+ * 返回true，需要重新执行，返回false，不需要重新执行
+ * @return
+ */
 bool ReplicatedMergeMutateTaskBase::executeImpl()
 {
     std::optional<ThreadGroupSwitcher> switcher;
     if (merge_mutate_entry)
         switcher.emplace((*merge_mutate_entry)->thread_group);
-
+    // 删除已经处理的Entry的labmda
     auto remove_processed_entry = [&] () -> bool
     {
         try
@@ -172,7 +179,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
                 auto res = checkExistingPart();
                 /// Depending on condition there is no need to execute a merge
                 if (res == CheckExistingPartResult::PART_EXISTS)
-                    return remove_processed_entry();
+                    return remove_processed_entry(); // 如果我们发现这个part已经存在，那么就删除这个LogEntry
             }
 
             auto prepare_result = prepare();
@@ -180,20 +187,21 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
             part_log_writer = prepare_result.part_log_writer;
 
             /// Avoid rescheduling, execute fetch here, in the same thread.
-            if (!prepare_result.prepared_successfully)
+            if (!prepare_result.prepared_successfully) // 没有准备好，在当前thread中先拉取part，再进入下一个state
                 return execute_fetch(prepare_result.need_to_check_missing_part_in_fetch);
 
             state = State::NEED_EXECUTE_INNER_MERGE;
-            return true;
+            return true; // 到达下一个state，需要继续执行。这里可以看到，肯定不会在当前Thread继续执行，而是肯定会退出,然后基于调度算法进行下一次的调度
         }
         case State::NEED_EXECUTE_INNER_MERGE :
         {
             try
             {
-                if (!executeInnerTask()) // 真正执行
+                // 可以看到，如果executeInnerTask()返回true，这里就不会到达State::NEED_FINALIZE，而是直接返回true
+                if (!executeInnerTask()) // 真正执行，所以 executeInnerTask()返回false代表成功，返回true代表失败
                 {
                     state = State::NEED_FINALIZE;
-                    return true;
+                    return true; // 到达下一个state，需要继续执行。这里可以看到，肯定不会在当前Thread继续执行，而是肯定会退出,然后基于调度算法进行下一次的调度
                 }
             }
             catch (...)
@@ -203,7 +211,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
                 throw;
             }
 
-            return true;
+            return true; //  还是当前的State，需要重新执行。这里可以看到，肯定不会在当前Thread继续执行，而是肯定会退出,然后基于调度算法进行下一次的调度
         }
         case State::NEED_FINALIZE :
         {
@@ -218,7 +226,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
                     part_log_writer(ExecutionStatus::fromCurrentException("", true));
                 throw;
             }
-            // 执行完成以后才会删除
+            // 执行完成以后才会删除,把entry从queue中删除
             return remove_processed_entry();
         }
         case State::SUCCESS :
@@ -226,7 +234,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Do not call execute on previously succeeded task");
         }
     }
-    return false;
+    return false; // 所有state -> 所有stage -> 所有task全部执行结束
 }
 
 

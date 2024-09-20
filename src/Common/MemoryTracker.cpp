@@ -602,6 +602,11 @@ void MemoryTracker::setParent(MemoryTracker * elem)
 
 bool canEnqueueBackgroundTask()
 {
+    /**
+     * LOG_INFO(log, "Merges and mutations memory limit is set to {}",
+       formatReadableSizeWithBinarySuffix(merges_mutations_memory_usage_soft_limit));
+       background_memory_tracker.setSoftLimit(merges_mutations_memory_usage_soft_limit);
+     */
     auto limit = background_memory_tracker.getSoftLimit();
     auto amount = background_memory_tracker.get();
     return limit == 0 || amount < limit;

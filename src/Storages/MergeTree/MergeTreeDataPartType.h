@@ -64,6 +64,8 @@ private:
 };
 
 /// Types of data part storage format.
+/// 需要区别  MergeTreeDataPartStorageType 和 MergeTreeDataPartType
+/// MergeTreeDataPartStorageType 和 MergeTreeDataPartType共同组成 MergeTreeDataPartFormat
 class MergeTreeDataPartStorageType
 {
 public:

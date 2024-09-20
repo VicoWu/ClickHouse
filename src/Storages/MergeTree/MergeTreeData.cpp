@@ -5875,20 +5875,24 @@ std::unordered_set<String> MergeTreeData::getAllPartitionIds() const
 MergeTreeData::DataPartsVector MergeTreeData::getDataPartsVectorForInternalUsage(
     const DataPartStates & affordable_states, const DataPartsLock & /*lock*/, DataPartStateVector * out_states) const
 {
-    DataPartsVector res;
+    // using DataPartsVector = std::vector<DataPartPtr>;
+    DataPartsVector res; // res 用于存储最终的结果向量，buf 是一个临时缓冲区，用于在合并过程中交换数据。
     DataPartsVector buf;
 
     // 获取所有状态的part
     for (auto state : affordable_states)
     {
         auto range = getDataPartsStateRange(state);
-        std::swap(buf, res);
+        std::swap(buf, res); // 交换缓冲区和结果向量：
         res.clear();
+        // 使用 std::merge 函数将当前状态的分片（range）与之前结果的分片（buf）进行合并，合并后的结果存储在 res 中
         std::merge(range.begin(), range.end(), buf.begin(), buf.end(), std::back_inserter(res), LessDataPart());
     }
 
     if (out_states != nullptr)
     {
+        // 如果传入的指针 out_states 不为空，说明调用者希望获取每个分片的状态。此时，
+        // 方法会调整 out_states 的大小与结果向量一致，并依次将每个分片的状态填充到 out_states 中
         out_states->resize(res.size());
         for (size_t i = 0; i < res.size(); ++i)
             (*out_states)[i] = res[i]->getState();

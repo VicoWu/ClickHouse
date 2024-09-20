@@ -35,7 +35,7 @@ struct Estimator
         if (settings.enable_heuristic_to_remove_small_parts_at_right)
             while (end >= begin + 3 && (end - 1)->size < settings.heuristic_to_remove_small_parts_at_right_max_ratio * sum_size)
                 --end;
-
+        // 评分越小越好，找到一个更优的merge，因此替换当前方案
         if (min_score == 0.0 || current_score < min_score)
         {
             min_score = current_score;
@@ -103,7 +103,7 @@ bool allow(
     double max_size_to_lower_base_log,
     const SimpleMergeSelector::Settings & settings)
 {
-    // 如果 min_age_to_force_merge = true，并且两个part中即使最年轻的part的age也大于min_age_to_force_merge，那么无条件合并
+    // 如果 min_age_to_force_merge = true，并且两个part中所有的part的age都大于min_age_to_force_merge，那么无条件合并
     if (settings.min_age_to_force_merge && min_age >= settings.min_age_to_force_merge)
         return true;
 
@@ -217,7 +217,7 @@ void selectWithinPartition(
 /**
  * 方法在给定的一组分区范围（parts_ranges）中选择最佳的要合并的PartsRange
  * 该方法用于优化合并操作，以减少 ClickHouse 数据库中部分数量，进而提升查询性能。
-* @param parts_ranges
+*  @param parts_ranges
  * @param max_total_size_to_merge
  * @return
  */

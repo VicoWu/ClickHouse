@@ -49,9 +49,9 @@ struct TaskRuntimeData
         CurrentMetrics::values[metric].fetch_add(1);
     }
 
-    ~TaskRuntimeData()
+    ~TaskRuntimeData() // 析构这个Task对象，发生在这个Task完全执行结束(State -> Stage -> mini-task全部结束)
     {
-        CurrentMetrics::values[metric].fetch_sub(1);
+        CurrentMetrics::values[metric].fetch_sub(1); // metric减去1
     }
 
     ExecutableTaskPtr task;

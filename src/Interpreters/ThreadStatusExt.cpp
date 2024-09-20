@@ -114,7 +114,6 @@ ThreadGroupPtr ThreadGroup::createForBackgroundProcess(ContextPtr storage_contex
     group->memory_tracker.setParent(&background_memory_tracker);
     if (settings.memory_tracker_fault_probability > 0.0)
         group->memory_tracker.setFaultProbability(settings.memory_tracker_fault_probability);
-
     return group;
 }
 

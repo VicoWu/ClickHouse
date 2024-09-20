@@ -73,9 +73,10 @@ MergeTreeDataMergerMutator::MergeTreeDataMergerMutator(MergeTreeData & data_)
 
 UInt64 MergeTreeDataMergerMutator::getMaxSourcePartsSizeForMerge() const
 {
+    // 当前处于pending/active的task的总的数量，即已经加入到Pending(但是现在可能已经进入了active队列)但是还没有最终销毁的task的数量
     size_t scheduled_tasks_count = CurrentMetrics::values[CurrentMetrics::BackgroundMergesAndMutationsPoolTask].load(std::memory_order_relaxed);
-
-    auto max_tasks_count = data.getContext()->getMergeMutateExecutor()->getMaxTasksCount();
+    // 可以并行使用的Slot数量，是并发线程数量的两倍，32，也就是pending和active各自的容量
+    auto max_tasks_count = data.getContext()->getMergeMutateExecutor()->getMaxTasksCount(); // MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor
     return getMaxSourcePartsSizeForMerge(max_tasks_count, scheduled_tasks_count);
 }
 
@@ -136,7 +137,7 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
     const auto data_settings = data.getSettings();
     // 已经占用的task的数量
     // 查看 shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
-    // 当前pending + active中的task的数量
+    // 当前pending + active中的task的数量，包括了merge和mutate
     size_t occupied = CurrentMetrics::values[CurrentMetrics::BackgroundMergesAndMutationsPoolTask].load(std::memory_order_relaxed);
     //     M(UInt64, max_number_of_mutations_for_replica, 0, "Limit the number of part mutations per replica to the specified amount.
     //     Zero means no limit on the number of mutations per replica (the execution can still be constrained by other settings).", 0) \\
@@ -172,15 +173,15 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
  */
 SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
     FutureMergedMutatedPartPtr future_part,
-    bool aggressive,
+    bool aggressive, // false
     size_t max_total_size_to_merge,
-    const AllowedMergingPredicate & can_merge_callback, // 搜索 using AllowedMergingPredicate查看 AllowedMergingPredicate
-    bool merge_with_ttl_allowed,
+    const AllowedMergingPredicate & can_merge_callback, // 搜索 using AllowedMergingPredicate 查看 AllowedMergingPredicate
+    bool merge_with_ttl_allowed, // 只要当前还没有reach ttl的threshold
     const MergeTreeTransactionPtr & txn, // 没有txn
     String & out_disable_reason,
     const PartitionIdsHint * partitions_hint)
 {
-    // 第一步，获取可以用于合并的数据部分
+    // 第一步，获取可以用于合并的数据部分，可以看到，这一步与是否是TTL Merge无关
     MergeTreeData::DataPartsVector data_parts = getDataPartsToSelectMergeFrom(txn, partitions_hint);
 
     auto metadata_snapshot = data.getInMemoryMetadataPtr();
@@ -254,6 +255,7 @@ MergeTreeDataMergerMutator::PartitionIdsHint MergeTreeDataMergerMutator::getPart
     auto metadata_snapshot = data.getInMemoryMetadataPtr();
 
     String out_reason;
+    // MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPossibleMergeRanges(
     MergeSelectingInfo info = getPossibleMergeRanges(data_parts, can_merge_callback, txn, out_reason);
 
     if (info.parts_selected_precondition == 0)
@@ -322,7 +324,7 @@ MergeTreeData::DataPartsVector MergeTreeDataMergerMutator::getDataPartsToSelectM
     if (!txn) // 如果txn是空的
     {
         /// Simply get all active parts
-        // 返回所有的part，只会选择active的part。 搜索 MergeTreeData::DataPartsVector MergeTreeData::getDataPartsVectorForInternalUsage(
+        // 返回所有的part，只会选择active的part。 搜索 MergeTreeData::DataPartsVector MergeTreeData::getDataPartsVectorForInternalUsage() const
         return data.getDataPartsVectorForInternalUsage();
     }
 
@@ -532,7 +534,7 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
     FutureMergedMutatedPartPtr future_part,
     bool aggressive,
     size_t max_total_size_to_merge, // 当前计算好的最大可合并的part数量
-    bool merge_with_ttl_allowed,
+    bool merge_with_ttl_allowed, // 是否允许ttl merge，这里只是与threshold有关
     const StorageMetadataPtr & metadata_snapshot,
     //  using PartsRanges = std::vector<PartsRange>;
     const IMergeSelector::PartsRanges & parts_ranges, // 已经计算好的part rage.
@@ -542,7 +544,9 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
 {
     const auto data_settings = data.getSettings();
     IMergeSelector::PartsRange parts_to_merge; // 初始化一个空的 parts_to_merge 容器，用于存储选择出的可合并部分。
+    // 整个parts
     // 首先检查是否有任何 TTL 相关的合并需要执行（例如删除过期数据或者重新压缩数据）。
+    // 只要这张表是TTL表，或者这张表的列有TTL的列，那么就是Merge-with-TTL,而不是Regular Merge
     if (metadata_snapshot->hasAnyTTL() && merge_with_ttl_allowed && !ttl_merges_blocker.isCancelled())
     {
         // 使用 TTLDeleteMergeSelector 或 TTLRecompressMergeSelector 来选择适合的part进行合并。
@@ -552,18 +556,20 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
                 next_delete_ttl_merge_times_by_partition,
                 current_time,
                 data_settings->merge_with_ttl_timeout,
-                /*only_drop_parts*/ true,
+                /*only_drop_parts*/ true, // 先尝试只进行drop
                 dry_run);
 
         /// The size of the completely expired part of TTL drop is not affected by the merge pressure and the size of the storage space
         parts_to_merge = drop_ttl_selector.select(parts_ranges, data_settings->max_bytes_to_merge_at_max_space_in_pool);
         if (!parts_to_merge.empty())
         {
-            future_part->merge_type = MergeType::TTLDelete;
+            future_part->merge_type = MergeType::TTLDelete;  // 只进行drop，发现了一些可以直接drop的part
         }
+        // 如果通过只drop的方式没有找到合适的parts，那么如果不允许只drop ttl
         else if (!data_settings->ttl_only_drop_parts)
         {
-            TTLDeleteMergeSelector delete_ttl_selector(
+            // M(Bool, ttl_only_drop_parts, false, "Only drop altogether the expired parts and not partially prune them.", 0)
+            TTLDeleteMergeSelector delete_ttl_selector( // 尝试通过非drop模式下的TTLDeleteMergeSelector选择parts
                 next_delete_ttl_merge_times_by_partition,
                 current_time,
                 data_settings->merge_with_ttl_timeout,
@@ -571,12 +577,11 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
                 dry_run);
 
             parts_to_merge = delete_ttl_selector.select(parts_ranges, max_total_size_to_merge);
-            if (!parts_to_merge.empty())
+            if (!parts_to_merge.empty()) // 找到了合适的parts
                 future_part->merge_type = MergeType::TTLDelete;
         }
-
         if (parts_to_merge.empty() && metadata_snapshot->hasAnyRecompressionTTL())
-        {
+        { // 没有找到合适的parts，那么尝试按照recompression ttl进行压缩
             TTLRecompressMergeSelector recompress_ttl_selector(
                     next_recompress_ttl_merge_times_by_partition,
                     current_time,
@@ -589,7 +594,7 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
                 future_part->merge_type = MergeType::TTLRecompress;
         }
     }
-
+    // 没有为TTL Merge选择出来parts，那么就使用 SimpleMergeSelector
     if (parts_to_merge.empty())
     {
         SimpleMergeSelector::Settings merge_settings;
@@ -639,7 +644,7 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
     }
 
     LOG_DEBUG(log, "Selected {} parts from {} to {}", parts.size(), parts.front()->name, parts.back()->name);
-    future_part->assign(std::move(parts));
+    future_part->assign(std::move(parts)); // 将选择的parts放入到future_part中
     return SelectPartsDecision::SELECTED;
 }
 

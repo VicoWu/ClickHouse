@@ -1380,7 +1380,7 @@ bool StorageMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assign
         /// The problem that we already booked a slot for TTL merge, but a merge list entry will be created only in a prepare method
         /// in MergePlainMergeTreeTask. So, this slot will never be freed.
         if (!scheduled && isTTLMergeType(merge_entry->future_part->merge_type))
-            getContext()->getMergeList().cancelMergeWithTTL();
+            getContext()->getMergeList().cancelMergeWithTTL(); // 如果没有调度成功
         return scheduled;
     }
     if (mutate_entry)

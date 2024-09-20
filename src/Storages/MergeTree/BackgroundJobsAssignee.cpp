@@ -12,7 +12,7 @@ namespace DB
 BackgroundJobsAssignee::BackgroundJobsAssignee(MergeTreeData & data_, BackgroundJobsAssignee::Type type_, ContextPtr global_context_)
     : WithContext(global_context_)
     , data(data_)
-    , sleep_settings(global_context_->getBackgroundMoveTaskSchedulingSettings())
+    , sleep_settings(global_context_->getBackgroundMoveTaskSchedulingSettings()) // 这里的settings是使用的getBackgroundMoveTaskSchedulingSettings()
     , rng(randomSeed())
     , type(type_)
 {
@@ -45,10 +45,11 @@ void BackgroundJobsAssignee::postpone()
 
     no_work_done_count += 1; // 任务调度失败的次数线性递增，如果失败的任务很多，那么递增时间也会递增
     double random_addition = std::uniform_real_distribution<double>(0, sleep_settings.task_sleep_seconds_when_no_work_random_part)(rng);
-
     size_t next_time_to_execute = static_cast<size_t>(
         1000 * (std::min(
+            // 计算出的延迟时间不会超过一个最大值 sleep_settings.task_sleep_seconds_when_no_work_max。这是为了避免延迟时间过长而导致任务长时间不被执行
             sleep_settings.task_sleep_seconds_when_no_work_max,
+            // sleep_settings.task_sleep_seconds_when_no_work_multiplier 的 no_work_done_count 次方。这意味着随着失败次数的增加，延迟时间会按指数递增,默认是1.1
             sleep_settings.thread_sleep_seconds_if_nothing_to_do * std::pow(sleep_settings.task_sleep_seconds_when_no_work_multiplier, no_work_done_count))
         + random_addition));
 
@@ -66,11 +67,11 @@ bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_tas
     //  MergeMutateBackgroundExecutorPtr Context::getMergeMutateExecutor()
     //  bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
     //  using MergeMutateBackgroundExecutor = MergeTreeBackgroundExecutor<DynamicRuntimeQueue>;
-    //using MergeMutateBackgroundExecutorPtr = std::shared_ptr<MergeMutateBackgroundExecutor>;
+    //  using MergeMutateBackgroundExecutorPtr = std::shared_ptr<MergeMutateBackgroundExecutor>;
     bool res = getContext()->getMergeMutateExecutor()->trySchedule(merge_task); // 返回true代表调度成功，这个task随后会在对应的MergeMutateBackgroundExecutor的pool中执行
     res // 如果  MergeTreeBackgroundExecutor的pool能够调度成功，那么进行trigger
         ? trigger()  // 调用对应的holder的schedule()方法 ， BackgroundJobsAssignee::trigger() ->  bool BackgroundSchedulePoolTaskInfo::schedule() -> void BackgroundSchedulePoolTaskInfo::scheduleImpl
-        : postpone();
+        : postpone(); // postpone的原因是task满了，延迟调度
     return res;
 }
 

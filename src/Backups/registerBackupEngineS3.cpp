@@ -105,7 +105,7 @@ void registerBackupEngineS3(BackupFactory & factory)
         }
 
         if (params.open_mode == IBackup::OpenMode::READ)
-        {
+        { // 这是做Restore
             auto reader = std::make_shared<BackupReaderS3>(S3::URI{s3_uri},
                                                            access_key_id,
                                                            secret_access_key,
@@ -123,7 +123,7 @@ void registerBackupEngineS3(BackupFactory & factory)
                 params.use_same_s3_credentials_for_base_backup);
         }
         else
-        {
+        { // 这是做 Backup
             auto writer = std::make_shared<BackupWriterS3>(S3::URI{s3_uri},
                                                            access_key_id,
                                                            secret_access_key,

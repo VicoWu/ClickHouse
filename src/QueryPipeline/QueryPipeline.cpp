@@ -335,6 +335,10 @@ QueryPipeline::QueryPipeline(
     checkPulling(*processors, output, totals, extremes);
 }
 
+/**
+ * MergeTask::VerticalMergeStage::prepareVerticalMergeForOneColumn()
+ * @param pipe
+ */
 QueryPipeline::QueryPipeline(Pipe pipe)
 {
     if (pipe.numOutputPorts() > 0)

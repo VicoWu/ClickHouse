@@ -11,6 +11,7 @@ namespace DB
 /// ReplicatedMergeTreeLogEntry.
 ///
 /// Order is important, don't try to change it.
+// 需要跟 ReplicatedMergeTreeLogEntryData的enum Type区别开
 enum class MergeType
 {
     /// Just regular merge

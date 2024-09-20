@@ -78,6 +78,8 @@ private:
     /// Tasks.
     std::condition_variable tasks_cond_var;
     std::mutex tasks_mutex;
+    //    using TaskInfo = BackgroundSchedulePoolTaskInfo;
+    //    using TaskInfoPtr = std::shared_ptr<TaskInfo>;
     std::deque<TaskInfoPtr> tasks;
     Threads threads;
 

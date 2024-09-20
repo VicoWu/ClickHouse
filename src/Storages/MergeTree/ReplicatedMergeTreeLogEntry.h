@@ -30,6 +30,7 @@ namespace ErrorCodes
 /// Record about what needs to be done. Only data (you can copy them).
 struct ReplicatedMergeTreeLogEntryData
 {
+    // 需要跟 enum class MergeType 区别开
     enum Type
     {
         EMPTY,          /// Not used.

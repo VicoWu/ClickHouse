@@ -172,7 +172,7 @@ void BackupReaderS3::copyFileToDisk(const String & path_in_backup, size_t file_s
                 throw Exception(ErrorCodes::LOGICAL_ERROR,
                                 "Blob writing function called with unexpected blob_path.size={} or mode={}",
                                 blob_path.size(), mode);
-
+            // 将文件从S3拷贝到S3
             copyS3File(
                 client,
                 s3_uri.bucket,
@@ -257,7 +257,6 @@ void BackupWriterS3::copyFileFromDisk(const String & path_in_backup, DiskPtr src
             return; /// copied!
         }
     }
-
     /// Fallback to copy through buffers.
     BackupWriterDefault::copyFileFromDisk(path_in_backup, src_disk, src_path, copy_encrypted, start_pos, length);
 }

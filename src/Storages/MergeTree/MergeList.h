@@ -134,10 +134,14 @@ public:
         : Parent(CurrentMetrics::Merge)
     {}
 
+    /**
+     * 在析构方法 ~BackgroundProcessListEntry()
+     * @param entry
+     */
     void onEntryDestroy(const Parent::Entry & entry) override
     {
         if (isTTLMergeType(entry->merge_type))
-            --merges_with_ttl_counter;
+            --merges_with_ttl_counter;  //  销毁的时候，merges_with_ttl_counter会减去1
     }
 
     void cancelPartMutations(const StorageID & table_id, const String & partition_id, Int64 mutation_version)
@@ -180,7 +184,7 @@ public:
 
     void cancelMergeWithTTL()
     {
-        --merges_with_ttl_counter;
+        --merges_with_ttl_counter; // 取消的时候会减去1
     }
 
     size_t getMergesWithTTLCount() const

@@ -3708,7 +3708,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
          *     M(UInt64, max_replicated_merges_in_queue, 1000,
          *     "How many tasks of merging and mutating parts are allowed simultaneously in ReplicatedMergeTree queue.", 0) \
          */
-        if (merges_and_mutations_sum >= storage_settings_ptr->max_replicated_merges_in_queue) // 数量是否超过限制
+        if (merges_and_mutations_sum >= storage_settings_ptr->max_replicated_merges_in_queue) // 数量是否超过限制，这里的意思是，Queue中的元素已经太多了(说明没有处理完)，因此不再往Zookeeper上生成LogEntry了
         {
             LOG_TRACE(log, "Number of queued merges ({}) and part mutations ({})"
                 " is greater than max_replicated_merges_in_queue ({}), so won't select new parts to merge or mutate.",
@@ -3736,7 +3736,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         PartitionIdsHint partitions_to_merge_in;
         if (can_assign_merge) // 可以merge
         {
-            auto lightweight_merge_pred = LocalMergePredicate(queue); // 创建 LocalMergePredicate 对象，判断哪些数据分区可以被合并
+            auto lightweight_merge_pred = LocalMergePredicate(queue); // 创建 LocalMergePredicate 对象，判断哪些数据partition可以被合并
             partitions_to_merge_in = merger_mutator.getPartitionsThatMayBeMerged( // 快速获取可能被合并的分区列表
                 // 传入的是一个空的transaction
                 max_source_parts_size_for_merge, lightweight_merge_pred, merge_with_ttl_allowed, NO_TRANSACTION_PTR);
@@ -3753,10 +3753,10 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
             merger_mutator.selectPartsToMerge(future_merged_part, false, max_source_parts_size_for_merge, *merge_pred,
                 merge_with_ttl_allowed, NO_TRANSACTION_PTR, out_reason, &partitions_to_merge_in) == SelectPartsDecision::SELECTED)
         {
-            // 此时，future_merged_part中存放了需要进行merge 的parts信息，根据这些parts信息，创建一个LogEntry，写入到zookeeper的log下面。
+            // 此时，future_merged_part中存放了需要进行merge 的parts信息(一定是属于某一个partition的)，根据这些parts信息，创建一个LogEntry，写入到zookeeper的log下面。
             // 方法调用完成以后，LogEntry已经创建在了zookeeper上
             // StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::createLogEntryToMergeParts
-            create_result = createLogEntryToMergeParts( // 这个方法只会创建一个LogEntry
+            create_result = createLogEntryToMergeParts( // 这个方法只会创建一个LogEntry，这个LogEntry的所有parts只属于某一个partition
                 zookeeper,
                 future_merged_part->parts,
                 future_merged_part->name,
@@ -3788,7 +3788,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
 
             /// Choose a part to mutate.
             DataPartsVector data_parts = getDataPartsVectorForInternalUsage();
-            for (const auto & part : data_parts) // 每次只是修改一个part
+            for (const auto & part : data_parts) // 跟merge不同，mutate的时候每次只是修改一个part
             {
                 if (part->getBytesOnDisk() > max_source_part_size_for_mutation)
                     continue;
@@ -3826,23 +3826,31 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
 
 
     Float32 new_sleep_ms = merge_selecting_sleep_ms;
+    /**
+     * 如果当前尝试的结果为 EntryCreated（成功创建了一个合并任务）或 NeedRetry（需要重试），那么系统会缩短等待时间 new_sleep_ms。
+     * 具体做法是将等待时间除以一个减速因子 merge_selecting_sleep_slowdown_factor。
+     */
     if (result == AttemptStatus::EntryCreated || result == AttemptStatus::NeedRetry)
         new_sleep_ms /= storage_settings_ptr->merge_selecting_sleep_slowdown_factor;
     else if (result == AttemptStatus::CannotSelect)
+        // 如果当前尝试的结果为 CannotSelect（无法选择合并任务），则系统会延长等待时间，将其乘以相同的减速因子。
         new_sleep_ms *= storage_settings_ptr->merge_selecting_sleep_slowdown_factor;
+    // 乘以一个随机值，这个随机值在 1.0 到 1.1 之间，目的是避免等待时间总是固定不变，从而导致可能的竞争条件或性能瓶颈。
     new_sleep_ms *= std::uniform_real_distribution<Float32>(1.f, 1.1f)(thread_local_rng);
-    merge_selecting_sleep_ms = static_cast<UInt64>(new_sleep_ms);
+    merge_selecting_sleep_ms = static_cast<UInt64>(new_sleep_ms); // 更新全局等待时间
 
     if (merge_selecting_sleep_ms < storage_settings_ptr->merge_selecting_sleep_ms)
+        // 如果计算得出的 merge_selecting_sleep_ms 小于配置的最小等待时间 merge_selecting_sleep_ms，则将其设为最小等待时间。
         merge_selecting_sleep_ms = storage_settings_ptr->merge_selecting_sleep_ms;
     if (merge_selecting_sleep_ms > storage_settings_ptr->max_merge_selecting_sleep_ms)
+        // 如果 merge_selecting_sleep_ms 大于配置的最大等待时间 max_merge_selecting_sleep_ms，则将其设为最大等待时间。
         merge_selecting_sleep_ms = storage_settings_ptr->max_merge_selecting_sleep_ms;
 
     if (result == AttemptStatus::EntryCreated)
         // 无论是创建了merge还是mutation的LogEntry，都立即调度merge_selecting_task，其实还是调用该方法 mergeSelectingTask()
         merge_selecting_task->schedule();  // BackgroundSchedulePoolTaskInfo::schedule()
     else
-    {
+    {  // 只要不是EntryCreated，即如果是 CannotSelect 或者 NeedRetry
         // 并没有什么新的任务LogEntry，因此延迟进行调度
         LOG_TRACE(log, "Scheduling next merge selecting task after {}ms", merge_selecting_sleep_ms);
         merge_selecting_task->scheduleAfter(merge_selecting_sleep_ms);
@@ -3929,7 +3937,7 @@ StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::c
     entry.new_part_name = merged_name;
     entry.new_part_uuid = merged_part_uuid;
     entry.new_part_format = merged_part_format;
-    entry.merge_type = merge_type;
+    entry.merge_type = merge_type; // 注意区别 entry.type 和  entry.merge_type
     entry.deduplicate = deduplicate;
     entry.deduplicate_by_columns = deduplicate_by_columns;
     entry.cleanup = cleanup;
@@ -3948,7 +3956,7 @@ StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::c
     ops.emplace_back(zkutil::makeSetRequest(
         fs::path(zookeeper_path) / "log", "", log_version)); /// 检查并更新版本号，但是数据设置为空，版本设置为log_version
 
-    Coordination::Error code = zookeeper->tryMulti(ops, responses); //
+    Coordination::Error code = zookeeper->tryMulti(ops, res``ponses); //
 
     if (code == Coordination::Error::ZOK)
     {
@@ -5741,14 +5749,14 @@ bool StorageReplicatedMergeTree::optimize(
             SelectPartsDecision select_decision = SelectPartsDecision::CANNOT_SELECT;
             // 通过合并谓词，确定是否可以进行合并
             if (partition_id.empty())
-            {   // 在optimize()中，确定可以合并的部分
+            {   // 在optimize()中，确定可以合并的part
                 select_decision = merger_mutator.selectPartsToMerge(
                     future_merged_part, /* aggressive */ true, storage_settings_ptr->max_bytes_to_merge_at_max_space_in_pool,
                     can_merge, /* merge_with_ttl_allowed */ false, NO_TRANSACTION_PTR, disable_reason);
             }
             else
             {
-                // 在optimize()中，确定可以合并的部分
+                // 在optimize()中，确定可以合并的part
                 select_decision = merger_mutator.selectAllPartsToMergeWithinPartition(
                     future_merged_part, can_merge, partition_id, final, metadata_snapshot, NO_TRANSACTION_PTR,
                     disable_reason, query_context->getSettingsRef().optimize_skip_merged_partitions);

@@ -45,9 +45,20 @@ bool ReplicatedMergeTreeMergeStrategyPicker::isMergeFinishedByReplica(const Stri
     return false;
 }
 
-
+/**
+ * 是在一个地方merge吗？默认 execute_merges_on_single_replica_time_threshold = 0，该方法返回false，即不是在一个Replica上merge，而是多个replica同时merge
+ * @param entry
+ * @return
+ */
 bool ReplicatedMergeTreeMergeStrategyPicker::shouldMergeOnSingleReplica(const ReplicatedMergeTreeLogEntryData & entry) const
 {
+    /**
+     *     M(Seconds, execute_merges_on_single_replica_time_threshold, 0,
+     *     "When greater than zero only a single replica starts the merge immediately,
+     *     others wait up to that amount of time to download the result instead of doing merges locally.
+     *     If the chosen replica doesn't finish the merge during that amount of time, fallback to standard behavior happens.", 0) \
+     *     如果配置了一个非0的值，那么只有一个replica会开始这个merge，其它的replica会等待这个配置的时间然后试图下载已经merge完成的replica
+     */
     time_t threshold = execute_merges_on_single_replica_time_threshold;
     return (
         threshold > 0       /// feature turned on

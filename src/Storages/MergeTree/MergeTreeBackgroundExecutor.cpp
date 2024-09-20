@@ -47,7 +47,7 @@ MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     CurrentMetrics::Metric max_tasks_metric_,
     std::string_view policy)
     : name(name_)
-    , threads_count(threads_count_)
+    , threads_count(threads_count_) // The default value is 16
     , max_tasks_count(max_tasks_count_) // 最大任务数量 默认  threads_count_ * max_tasks_count_ = 32
     , metric(metric_)  // 已经调度的task的数量(位于pending队列或者active队列)
     , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // active + pending 2 * 32 = 64
@@ -147,10 +147,10 @@ bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
     if (shutdown)
         return false;
 
-    auto & value = CurrentMetrics::values[metric];
-    if (value.load() >= static_cast<int64_t>(max_tasks_count))
+    auto & value = CurrentMetrics::values[metric]; // 总共往metric中添加过多少的task，只要调度一个task，metric + 1，当这个task最终执行完毕销毁，metric - 1
+    if (value.load() >= static_cast<int64_t>(max_tasks_count)) // 最大的task数量超标，返回false，调用者将会postpone
         return false;
-    // 将这个task封装成为TaskRuntimeData，然后放到pending中
+    // 将这个task封装成为TaskRuntimeData，然后放到pending中，只要往pending中添加一个task，metric加1
     // MergeTreeBackgroundExecutor<Queue>::threadFunction() 将会从pending中取出task然后放到active中
     pending.push(std::make_shared<TaskRuntimeData>(std::move(task), metric)); // using TaskRuntimeDataPtr = std::shared_ptr<TaskRuntimeData>;
 
@@ -226,7 +226,7 @@ void MergeTreeBackgroundExecutor<Queue>::removeTasksCorrespondingToStorage(Stora
 
 /**
  * routine()方法负责实际执行任务，并处理任务完成或重新调度的逻辑。
- * 在MergeTreeBackgroundExecutor<Queue>::threadFunction()中调用
+ * 在 MergeTreeBackgroundExecutor<Queue>::threadFunction() 中调用
  */
 template <class Queue>
 void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
@@ -253,7 +253,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
             item_->task.reset();
         });
         item_->is_done.set();
-        item_.reset();
+        item_.reset(); // shared_ptr的函数，减少对象的引用计数，如果对象的引用计数为0，那么析构对象
     };
 
     // lambda定义的task重启逻辑，会将task重新加入到pending中
@@ -298,6 +298,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     {
         ALLOW_ALLOCATIONS_IN_SCOPE;
         query_id = item->task->getQueryId();
+        // 这里need_execute_again并不代表是因为整个task需要重新执行，而是task被拆分成为state -> stage -> task，每一个最小粒度的task调度完毕，就会返回然后重新调度，只要不是最后一个State的最后一个Stage的最后一个task，那么就需要重新调度。
         need_execute_again = item->task->executeStep(); // 调用对应task的executeStep()方法，bool ReplicatedMergeMutateTaskBase::executeStep()
     }
     catch (...)
@@ -320,7 +321,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
 
     { // 需要重新执行
         std::lock_guard guard(mutex);
-        erase_from_active(item);
+        erase_from_active(item); //从active中移除
 
         if (item->is_currently_deleting)
         {
@@ -338,7 +339,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
             }
         }
 
-        on_task_restart(std::move(item)); // 执行task重启的labdmda
+        on_task_restart(std::move(item)); // 执行task重启的labdmda，将task重新添加到pending队列中
     }
 }
 
@@ -370,6 +371,7 @@ void MergeTreeBackgroundExecutor<Queue>::threadFunction()
                 item = std::move(pending.pop());
                 active.push_back(item); // 执行以前，先从pending添加到active
             }
+            // 这里可以看到，这里，从pending中取出task，将task放入running，然后执行task，都是线程池中的一个线程做的
             // 一旦有新任务进入pending队列，线程会从pending队列中弹出一个任务，并将其移动到active队列中。
             // 这一步骤确保任务从pending到active的状态转换。然后，线程调用routine(std::move(item));来执行任务。
             routine(std::move(item)); // void MergeTreeBackgroundExecutor<Queue>::routine

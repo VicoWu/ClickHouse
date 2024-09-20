@@ -38,10 +38,15 @@ private:
     ReplicatedMergeMutateTaskBase::PrepareResult prepare() override;
 
     bool finalize(ReplicatedMergeMutateTaskBase::PartLogWriter write_part_log) override;
-
+    /**
+     * 搜索 bool ReplicatedMergeMutateTaskBase::executeImpl()  查看调用
+     * 这个方法是 MutateFromLogEntryTask::executeInnerTask()
+     * 如果executeInnerTask()返回false，调用者会进入下一个stage继续执行，返回true，调用者会在当前stage再次调度，即，会重新执行方法 executeInnerTask()
+     * @return
+     */
     bool executeInnerTask() override
     {
-        return mutate_task->execute();
+        return mutate_task->execute(); // MergeTask::execute()
     }
 
     Priority priority;

@@ -56,6 +56,10 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
 
     if (storage_settings_ptr->always_fetch_merged_part)
     {
+        /**
+         *     M(Bool, always_fetch_merged_part, false, "If true, replica never merge parts and always
+         *     download merged parts from other replicas.", 0) \
+         */
         LOG_INFO(log, "Will fetch part {} because setting 'always_fetch_merged_part' is true", entry.new_part_name);
         return PrepareResult{
             .prepared_successfully = false,
@@ -82,9 +86,10 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
     /// In some use cases merging can be more expensive than fetching
     /// and it may be better to spread merges tasks across the replicas
     /// instead of doing exactly the same merge cluster-wise
-
+    // 如果只在一个Replica上merge(其它replica只需要等待一段时间然后进行fetch)
     if (storage.merge_strategy_picker.shouldMergeOnSingleReplica(entry))
     {
+        // 选择一个replica来执行merge
         std::optional<String> replica_to_execute_merge = storage.merge_strategy_picker.pickReplicaToExecuteMerge(entry);
         if (replica_to_execute_merge)
         {
@@ -105,7 +110,7 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
     {
         MergeTreeData::DataPartPtr source_part_or_covering = storage.getActiveContainingPart(source_part_name);
 
-        if (!source_part_or_covering)
+        if (!source_part_or_covering) // 遍历所有源部分的名称，检查这些源部分是否在本地存在。如果某些源部分本地不存在，则返回准备失败的结果，标记需要检查是否缺失部分。
         {
             /// We do not have one of source parts locally, try to take some already merged part from someone.
             LOG_DEBUG(log, "Don't have all parts (at least {} is missing) for merge {}; will try to fetch it instead. "
@@ -118,7 +123,7 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
             };
         }
 
-        if (source_part_or_covering->name != source_part_name)
+        if (source_part_or_covering->name != source_part_name) // 如果源部分被覆盖（即存在更大的合并部分），检查是否有逻辑错误，并且如果源部分在本地存在并且符合预期，则将其添加到待合并部分列表中。
         {
             /// We do not have source part locally, but we have some covering part. Possible options:
             /// 1. We already have merged part (source_part_or_covering->name == new_part_name)
@@ -140,6 +145,7 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
 
         parts.push_back(source_part_or_covering);
     }
+    //  此时，parts中存放了待合并的part
 
     /// All source parts are found locally, we can execute merge
 
@@ -150,8 +156,14 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
 
         size_t sum_parts_bytes_on_disk = 0;
         for (const auto & item : parts)
-            sum_parts_bytes_on_disk += item->getBytesOnDisk();
-
+            sum_parts_bytes_on_disk += item->getBytesOnDisk(); //计算所有parts的大小之和
+        /**
+         *     M(UInt64, prefer_fetch_merged_part_size_threshold,
+         *     10ULL * 1024 * 1024 * 1024,
+         *     "If sum size of parts exceeds this threshold and time passed after replication log entry creation
+         *     is greater than \"prefer_fetch_merged_part_time_threshold\",
+         *     prefer fetching merged part from replica instead of doing merge locally. To speed up very long merges.", 0) \
+         */
         if (sum_parts_bytes_on_disk >= storage_settings_ptr->prefer_fetch_merged_part_size_threshold)
         {
             String replica = storage.findReplicaHavingPart(entry.new_part_name, true);    /// NOTE excessive ZK requests for same data later, may remove.
@@ -171,6 +183,7 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
     /// Start to make the main work
     size_t estimated_space_for_merge = MergeTreeDataMergerMutator::estimateNeededDiskSpace(parts);
 
+    // 计算合并所需的磁盘空间，并尝试预留空间。如果不能成功预留空间，则尝试按照 TTL 规则预留空间。
     /// Can throw an exception while reserving space.
     IMergeTreeDataPart::TTLInfos ttl_infos;
     size_t max_volume_index = 0;
@@ -212,7 +225,8 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
     future_merged_part->uuid = entry.new_part_uuid;
     future_merged_part->updatePath(storage, reserved_space.get());
     future_merged_part->merge_type = entry.merge_type;
-
+    // 如果允许零拷贝复制。零拷贝复制允许副本之间直接共享数据而无需实际复制，从而提高效率
+    // 零拷贝复制一般是共享文件系统，这里略过
     if (storage_settings_ptr->allow_remote_fs_zero_copy_replication)
     {
         if (auto disk = reserved_space->getDisk(); disk->supportZeroCopyReplication())
@@ -302,6 +316,7 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
     task_context->setCurrentQueryId(getQueryId());
 
     /// Add merge to list
+    // 将当前的merge添加到MergeList中，返回创建的这个Entry (using Entry = BackgroundProcessListEntry<ListElement, Info>;)
     merge_mutate_entry = storage.getContext()->getMergeList().insert(
         storage.getStorageID(),
         future_merged_part,
@@ -310,6 +325,8 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
     transaction_ptr = std::make_unique<MergeTreeData::Transaction>(storage, NO_TRANSACTION_RAW);
     stopwatch_ptr = std::make_unique<Stopwatch>();
 
+    // 真正的任务执行部分。参考 MergeTaskPtr MergeTreeDataMergerMutator::mergePartsToTemporaryPart(
+    // 返回一个 MergeTask对象，这个task执行的入口是 MergeTask::execute()
     merge_task = storage.merger_mutator.mergePartsToTemporaryPart(
             future_merged_part,
             metadata_snapshot,

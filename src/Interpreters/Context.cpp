@@ -2856,6 +2856,9 @@ BackgroundSchedulePool & Context::getBufferFlushSchedulePool() const
     return *shared->buffer_flush_schedule_pool;
 }
 
+/**
+ * 这个方法没有调用者
+ */
 BackgroundTaskSchedulingSettings Context::getBackgroundProcessingTaskSchedulingSettings() const
 {
     BackgroundTaskSchedulingSettings task_settings;
@@ -2871,6 +2874,9 @@ BackgroundTaskSchedulingSettings Context::getBackgroundProcessingTaskSchedulingS
     return task_settings;
 }
 
+/**
+ * 这个方法是共享给所有类型的background task
+ */
 BackgroundTaskSchedulingSettings Context::getBackgroundMoveTaskSchedulingSettings() const
 {
     BackgroundTaskSchedulingSettings task_settings;
@@ -4808,7 +4814,7 @@ void Context::initializeBackgroundExecutorsIfNeeded()
     const ServerSettings & server_settings = shared->server_settings;
     size_t background_pool_size = server_settings.background_pool_size;
     auto background_merges_mutations_concurrency_ratio = server_settings.background_merges_mutations_concurrency_ratio;
-    //         // M(Float, background_merges_mutations_concurrency_ratio, 2, "The number of part mutation tasks that can be executed concurrently by each thread in background pool.", 0) \
+    // M(Float, background_merges_mutations_concurrency_ratio, 2, "The number of part mutation tasks that can be executed concurrently by each thread in background pool.", 0)
     size_t background_pool_max_tasks_count = static_cast<size_t>(background_pool_size * background_merges_mutations_concurrency_ratio);
     String background_merges_mutations_scheduling_policy = server_settings.background_merges_mutations_scheduling_policy;
     size_t background_move_pool_size = server_settings.background_move_pool_size;

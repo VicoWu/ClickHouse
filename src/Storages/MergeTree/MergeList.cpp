@@ -41,7 +41,7 @@ MergeListElement::MergeListElement(const StorageID & table_id_, FutureMergedMuta
         const auto & part = future_part->parts[0];
         part->partition.serializeText(part->storage, out, {});
     }
-
+    // 这里应该只是用这个thread group来将这个thread绑定到对应的context，从而实现对应的内存消耗的统计
     thread_group = ThreadGroup::createForBackgroundProcess(context);
 }
 
@@ -83,6 +83,9 @@ MergeInfo MergeListElement::getInfo() const
 
 MergeListElement::~MergeListElement()
 {
+    // getMemoryTracker() 的parent是 background_memory_tracker， background_memory_tracker 的parent是 total_memory_tracker
+    // const MemoryTracker & getMemoryTracker() const { return thread_group->memory_tracker; }
+    // background_memory_tracker
     background_memory_tracker.adjustOnBackgroundTaskEnd(&getMemoryTracker());
 }
 

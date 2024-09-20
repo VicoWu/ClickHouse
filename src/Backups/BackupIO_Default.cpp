@@ -88,6 +88,7 @@ void BackupWriterDefault::copyFileFromDisk(const String & path_in_backup, DiskPt
         else
             return src_disk->readFile(src_path, settings);
     };
+    // 由于copyDataToFile在IBackWriter中声明为virtual，因此这里实际上调用的是子类比如 BackupWriterS3::copyDataToFile
 
     copyDataToFile(path_in_backup, create_read_buffer, start_pos, length);
 }

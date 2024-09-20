@@ -33,12 +33,13 @@ IMergeSelector::PartsRange ITTLMergeSelector::select(
             continue;
 
         const auto & partition_id = getPartitionIdForPart(mergeable_parts_in_partition.front());
-        const auto & next_merge_time_for_partition = merge_due_times[partition_id];
+        const auto & next_merge_time_for_partition = merge_due_times[partition_id];// partition 的merge时间还没到，直接略过
         if (next_merge_time_for_partition > current_time)
             continue;
 
         for (Iterator part_it = mergeable_parts_in_partition.cbegin(); part_it != mergeable_parts_in_partition.cend(); ++part_it)
         {
+            // time_t TTLDeleteMergeSelector::getTTLForPart(
             time_t ttl = getTTLForPart(*part_it);
 
             if (ttl && !isTTLAlreadySatisfied(*part_it) && (partition_to_merge_index == -1 || ttl < partition_to_merge_min_ttl))
@@ -93,6 +94,7 @@ IMergeSelector::PartsRange ITTLMergeSelector::select(
     if (!dry_run)
     {
         const auto & best_partition_id = getPartitionIdForPart(best_partition.front());
+        // merge_cooldown_time 是在一次合并操作之后，需要等待多长时间才能再次对该分区进行合并
         merge_due_times[best_partition_id] = current_time + merge_cooldown_time;
     }
 
@@ -101,6 +103,10 @@ IMergeSelector::PartsRange ITTLMergeSelector::select(
 
 time_t TTLDeleteMergeSelector::getTTLForPart(const IMergeSelector::Part & part) const
 {
+    // 如果 我们只会整体drop parts，那么这个part的ttl就是part的最大的ttl，否则，就是part的最小的ttl
+    // 比如，一个part里面有的ttl是1Year，有的是1month，那么
+    //  如果only_drop_parts=true，那么这个part的ttl就是1year，必须1year以后再drop，
+    //  如果only_drop_parts=false，那么这个part的ttl就是1month，必须1month以后执行delete，
     return only_drop_parts ? part.ttl_infos->part_max_ttl : part.ttl_infos->part_min_ttl;
 }
 
@@ -112,12 +118,12 @@ bool TTLDeleteMergeSelector::isTTLAlreadySatisfied(const IMergeSelector::Part & 
 
     /// Dropping whole part is an exception to `shall_participate_in_merges` logic.
     if (only_drop_parts)
-        return false;
+        return false; // this part can be selected
 
     /// All TTL satisfied
-    if (!part.ttl_infos->hasAnyNonFinishedTTLs())
+    if (!part.ttl_infos->hasAnyNonFinishedTTLs())// 只有当所有的TTL都满足的时候才返回true
         return true;
-
+    // 执行到这里，说明 hasAnyNonFinishedTTLs为true()，即的确存在non-finished ttl
     return !part.shall_participate_in_merges;
 }
 

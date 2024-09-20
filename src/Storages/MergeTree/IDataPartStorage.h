@@ -344,7 +344,8 @@ public:
 
     IDataPartStorage & getDataPartStorage() { return *storage; }
     const IDataPartStorage & getDataPartStorage() const { return *storage; }
-
+    // using DataPartStoragePtr = std::shared_ptr<const IDataPartStorage>;
+    //using MutableDataPartStoragePtr = std::shared_ptr<IDataPartStorage>;
     MutableDataPartStoragePtr getDataPartStoragePtr() { return storage; }
     DataPartStoragePtr getDataPartStoragePtr() const { return storage; }
 

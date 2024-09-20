@@ -55,15 +55,21 @@ static void extractMergingAndGatheringColumns(
     NamesAndTypesList & gathering_columns, Names & gathering_column_names,
     NamesAndTypesList & merging_columns, Names & merging_column_names)
 {
+    // 排序键表达式中所需的列名列表
     Names sort_key_columns_vec = sorting_key_expr->getRequiredColumns();
+    // 这将 sort_key_columns_vec 中的所有元素（列名）复制到 key_columns 集合中。
     std::set<String> key_columns(sort_key_columns_vec.cbegin(), sort_key_columns_vec.cend());
-    for (const auto & index : indexes)
+    // 将索引列中的所有列都添加到 key_columns中g
+    for (const auto & index : indexes) // 遍历所有索引，将索引中所需的列名添加到 key_columns 集合中。
     {
         Names index_columns_vec = index.expression->getRequiredColumns();
         std::copy(index_columns_vec.cbegin(), index_columns_vec.cend(),
                   std::inserter(key_columns, key_columns.end()));
     }
 
+    /**
+     * 此时，key_columns中存放了排序列，索引列，然后，根据不同的合并模式，向key_columns中强制添加一些额外的列
+     */
     /// Force sign column for Collapsing mode
     if (merging_params.mode == MergeTreeData::MergingParams::Collapsing)
         key_columns.emplace(merging_params.sign_column);
@@ -80,16 +86,19 @@ static void extractMergingAndGatheringColumns(
         key_columns.emplace(merging_params.sign_column);
 
     /// Force to merge at least one column in case of empty key
+    /// 如果 key_columns 为空（即没有列被指定为排序键），则至少强制添加 storage_columns 中的第一列作为合并列。
     if (key_columns.empty())
         key_columns.emplace(storage_columns.front().name);
 
     /// TODO: also force "summing" and "aggregating" columns to make Horizontal merge only for such columns
-
+    // 遍历所有Storage Columns，检查每列是否在 key_columns 中。
+    // 如果在，则将该列添加到 merging_columns 和 merging_column_names 列表中；
+    // 否则，添加到 gathering_columns 和 gathering_column_names 列表中。
     for (const auto & column : storage_columns)
     {
         if (key_columns.contains(column.name))
         {
-            merging_columns.emplace_back(column);
+            merging_columns.emplace_back(column); // 需要合并的列
             merging_column_names.emplace_back(column.name);
         }
         else
@@ -127,15 +136,22 @@ static void addMissedColumnsToSerializationInfos(
 }
 
 
+/**
+ * 这是第一个stage的第一个task，第二个task是ExecuteAndFinalizeHorizontalPart::executeImpl()
+ * 这个方法是合并过程的准备阶段
+ * @return
+ */
 bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
 {
     String local_tmp_prefix;
+    // 处理合并的前缀
     if (global_ctx->need_prefix)
     {
         // projection parts have different prefix and suffix compared to normal parts.
         // E.g. `proj_a.proj` for a normal projection merge and `proj_a.tmp_proj` for a projection materialization merge.
         local_tmp_prefix = global_ctx->parent_part ? "" : "tmp_merge_";
     }
+    // 处理合并的后缀
     const String local_tmp_suffix = global_ctx->parent_part ? ctx->suffix : "";
 
     if (global_ctx->merges_blocker->isCancelled() || global_ctx->merge_list_element_ptr->is_cancelled.load(std::memory_order_relaxed))
@@ -143,6 +159,7 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
 
     /// We don't want to perform merge assigned with TTL as normal merge, so
     /// throw exception
+    // 在执行合并之前，检查是否有取消标志，如果是，则抛出异常终止合并操作。
     if (isTTLMergeType(global_ctx->future_part->merge_type) && global_ctx->ttl_merges_blocker->isCancelled())
         throw Exception(ErrorCodes::ABORTED, "Cancelled merging parts with TTL");
 
@@ -165,6 +182,7 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
     auto local_tmp_part_basename = local_tmp_prefix + global_ctx->future_part->name + local_tmp_suffix;
 
     std::optional<MergeTreeDataPartBuilder> builder;
+    // 如果有parent part，则使用parent part的存储路径，否则在指定的磁盘上创建一个新的数据部分。
     if (global_ctx->parent_part)
     {
         auto data_part_storage = global_ctx->parent_part->getDataPartStorage().getProjection(local_tmp_part_basename,  /* use parent transaction */ false);
@@ -186,7 +204,7 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
 
     if (data_part_storage->exists())
         throw Exception(ErrorCodes::DIRECTORY_ALREADY_EXISTS, "Directory {} already exists", data_part_storage->getFullPath());
-
+    // class DataPartStorageOnDiskBase : public IDataPartStorage
     data_part_storage->beginTransaction();
     /// Background temp dirs cleaner will not touch tmp projection directory because
     /// it's located inside part's directory
@@ -403,6 +421,9 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
 
 MergeTask::StageRuntimeContextPtr MergeTask::ExecuteAndFinalizeHorizontalPart::getContextForNextStage()
 {
+    /**
+     * 下一个Stage的context
+     */
     auto new_ctx = std::make_shared<VerticalMergeRuntimeContext>();
 
     new_ctx->rows_sources_write_buf = std::move(ctx->rows_sources_write_buf);
@@ -429,25 +450,35 @@ MergeTask::StageRuntimeContextPtr MergeTask::VerticalMergeStage::getContextForNe
     return new_ctx;
 }
 
-
+/**
+ * 第一个stage的execute总入口,调用者是bool MergeTask::execute()
+ * 由于是Horizontal合并，因此是多个merging_columns一次性执行(可能会执行多次)，因此会构建一次对应的unified pipeliine。
+ * 到了Vertical，由于是一列一列做，对于每一列，会为这一列的所有parts构建一个unified pipeline。
+ */
 bool MergeTask::ExecuteAndFinalizeHorizontalPart::execute()
 {
     assert(subtasks_iterator != subtasks.end());
     if ((*subtasks_iterator)())
-        return true;
-
-    /// Move to the next subtask in an array of subtasks
+        return true; // 返回true，说明这个task需要重新执行
+    // 返回false，说明这个task执行成功了，切换到下一个task
+    /// task指针移动到下一个subtask
     ++subtasks_iterator;
-    return subtasks_iterator != subtasks.end();
+    return subtasks_iterator != subtasks.end(); // 如果后面已经没有更多的subtask了，返回false，如果后面还有更多的subtask，返回true
 }
 
-
+/**
+ * 第一个stage的第二个task，第一个task是ExecuteAndFinalizeHorizontalPart::prepare()
+ * 这个方法是合并操作的执行阶段。这个方法主要负责从输入流中获取数据块，并将数据写入新合并的数据部分中。
+ * @return
+ */
 bool MergeTask::ExecuteAndFinalizeHorizontalPart::executeImpl()
 {
     Block block;
+    // 从 merging_executor 中拉取数据块，并将其写入合并的输出流中。同时更新已写入的行数。
+    // 搜索 bool PullingPipelineExecutor::pull(Block & block)
     if (!ctx->is_cancelled() && (global_ctx->merging_executor->pull(block)))
     {
-        global_ctx->rows_written += block.rows();
+        global_ctx->rows_written += block.rows(); // 统计行数
 
         const_cast<MergedBlockOutputStream &>(*global_ctx->to).write(block);
 
@@ -470,7 +501,7 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::executeImpl()
         }
 
         /// Need execute again
-        return true;
+        return true; // 返回true，说明还没有执行完，需要继续执行
     }
 
     global_ctx->merging_executor.reset();
@@ -489,20 +520,23 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::executeImpl()
     return false;
 }
 
-
+/**
+ * 这是VerticalMergeStage的第一个task
+ * @return
+ */
 bool MergeTask::VerticalMergeStage::prepareVerticalMergeForAllColumns() const
 {
      /// No need to execute this part if it is horizontal merge.
-    if (global_ctx->chosen_merge_algorithm != MergeAlgorithm::Vertical)
+    if (global_ctx->chosen_merge_algorithm != MergeAlgorithm::Vertical) //只负责vertical merge
         return false;
 
-    size_t sum_input_rows_exact = global_ctx->merge_list_element_ptr->rows_read;
-    size_t input_rows_filtered = *global_ctx->input_rows_filtered;
+    size_t sum_input_rows_exact = global_ctx->merge_list_element_ptr->rows_read; // 获取输入行数。
+    size_t input_rows_filtered = *global_ctx->input_rows_filtered;// 和过滤后的行数
     global_ctx->merge_list_element_ptr->columns_written = global_ctx->merging_column_names.size();
     global_ctx->merge_list_element_ptr->progress.store(ctx->column_sizes->keyColumnsWeight(), std::memory_order_relaxed);
 
     ctx->rows_sources_write_buf->next();
-    ctx->rows_sources_uncompressed_write_buf->next();
+    ctx->rows_sources_uncompressed_write_buf->next(); // 来自上一个Stage的write_buf
     /// Ensure data has written to disk.
     ctx->rows_sources_uncompressed_write_buf->finalize();
 
@@ -536,15 +570,19 @@ bool MergeTask::VerticalMergeStage::prepareVerticalMergeForAllColumns() const
     /// Then, move ownership to unique_ptr to concrete type.
     std::unique_ptr<ReadBufferFromFile> reread_buffer_from_file(reread_buffer_raw);
     /// CompressedReadBufferFromFile expects std::unique_ptr<ReadBufferFromFile> as argument.
-    ctx->rows_sources_read_buf = std::make_unique<CompressedReadBufferFromFile>(std::move(reread_buffer_from_file));
+    ctx->rows_sources_read_buf = std::make_unique<CompressedReadBufferFromFile>(std::move(reread_buffer_from_file)); // 创建read buffer
 
     /// For external cycle
     global_ctx->gathering_column_names_size = global_ctx->gathering_column_names.size();
-    ctx->column_num_for_vertical_merge = 0;
-    ctx->it_name_and_type = global_ctx->gathering_columns.cbegin();
+    ctx->column_num_for_vertical_merge = 0; // 这是外部遍历所有non-pk列的循环index
+    ctx->it_name_and_type = global_ctx->gathering_columns.cbegin(); // 迭代器
 
     const auto & settings = global_ctx->context->getSettingsRef();
     size_t max_delayed_streams = 0;
+    /**
+     *     M(UInt64, max_insert_delayed_streams_for_parallel_write, 0, "The maximum number of streams (columns) to delay final part flush.
+     *     Default - auto (1000 in case of underlying storage supports parallel write, for example S3 and disabled otherwise)", 0) \
+     */
     if (global_ctx->new_data_part->getDataPartStorage().supportParallelWrite())
     {
         if (settings.max_insert_delayed_streams_for_parallel_write.changed)
@@ -554,26 +592,27 @@ bool MergeTask::VerticalMergeStage::prepareVerticalMergeForAllColumns() const
     }
     ctx->max_delayed_streams = max_delayed_streams;
 
-    return false;
+    return false; // 这个task执行结束，开始运行这个Stage的下一个task
 }
 
 void MergeTask::VerticalMergeStage::prepareVerticalMergeForOneColumn() const
 {
+    // 当前的列名字和列类型
     const auto & [column_name, column_type] = *ctx->it_name_and_type;
-    Names column_names{column_name};
+    Names column_names{column_name}; //只有一列 using Names = std::vector<std::string>;
 
     ctx->progress_before = global_ctx->merge_list_element_ptr->progress.load(std::memory_order_relaxed);
 
     global_ctx->column_progress = std::make_unique<MergeStageProgress>(ctx->progress_before, ctx->column_sizes->columnWeight(column_name));
-
-    Pipes pipes;
+    Pipes pipes; // using Pipes = std::vector<Pipe>;
     for (size_t part_num = 0; part_num < global_ctx->future_part->parts.size(); ++part_num)
     {
+        // 每一个part，针对这一列构造一个Pipe
         Pipe pipe = createMergeTreeSequentialSource(
             *global_ctx->data,
             global_ctx->storage_snapshot,
             global_ctx->future_part->parts[part_num],
-            column_names,
+            column_names, // 列名称，显然，这里只有当前处理的这一列
             /*mark_ranges=*/ {},
             /*apply_deleted_mask=*/ true,
             ctx->read_with_direct_io,
@@ -583,14 +622,15 @@ void MergeTask::VerticalMergeStage::prepareVerticalMergeForOneColumn() const
 
         pipes.emplace_back(std::move(pipe));
     }
-
-    auto pipe = Pipe::unitePipes(std::move(pipes));
+    // 将这些多个Pipe组装成一个Pipe
+    auto pipe = Pipe::unitePipes(std::move(pipes)); // 通过unite，将多个Pipe组合成一个Pipe
 
     ctx->rows_sources_read_buf->seek(0, 0);
     auto transform = std::make_unique<ColumnGathererTransform>(pipe.getHeader(), pipe.numOutputPorts(), *ctx->rows_sources_read_buf);
-    pipe.addTransform(std::move(transform));
-
-    ctx->column_parts_pipeline = QueryPipeline(std::move(pipe));
+    pipe.addTransform(std::move(transform)); // 给这个United Pipe添加transform
+    // 用多个构造对应的 QueryPipeline，
+    // 搜索 QueryPipeline::QueryPipeline(Pipe pipe)
+    ctx->column_parts_pipeline = QueryPipeline(std::move(pipe)); // 为这个Pipe构造对应的QueyrPipeline
 
     /// Dereference unique_ptr
     ctx->column_parts_pipeline.setProgressCallback(MergeProgressCallback(
@@ -600,7 +640,7 @@ void MergeTask::VerticalMergeStage::prepareVerticalMergeForOneColumn() const
 
     /// Is calculated inside MergeProgressCallback.
     ctx->column_parts_pipeline.disableProfileEventUpdate();
-
+    // 创建基于Pull模式的 PipelineExecutor，上面构造的QueryPipeline作为这个PipelineExecutor的executor
     ctx->executor = std::make_unique<PullingPipelineExecutor>(ctx->column_parts_pipeline);
 
     ctx->column_to = std::make_unique<MergedColumnOnlyOutputStream>(
@@ -619,20 +659,24 @@ void MergeTask::VerticalMergeStage::prepareVerticalMergeForOneColumn() const
     ctx->column_elems_written = 0;
 }
 
-
+/**
+ * 对于当前列，执行实际的merge操作
+ * @return
+ */
 bool MergeTask::VerticalMergeStage::executeVerticalMergeForOneColumn() const
 {
     Block block;
     if (!global_ctx->merges_blocker->isCancelled() && !global_ctx->merge_list_element_ptr->is_cancelled.load(std::memory_order_relaxed)
-        && ctx->executor->pull(block))
+        // 搜索 bool PullingPipelineExecutor::pull(Block & block)
+        && ctx->executor->pull(block)) // 读取数据到Block, Block中的数据(包含元数据)应该是在内存中
     {
-        ctx->column_elems_written += block.rows();
-        ctx->column_to->write(block);
+        ctx->column_elems_written += block.rows(); // 数据总量统计
+        ctx->column_to->write(block); // 写入数据
 
         /// Need execute again
-        return true;
+        return true; // 当前列没有执行完，那么待会儿会继续处理这一列
     }
-    return false;
+    return false; // 当前列处理完了，进入这一列的下一个Stage
 }
 
 
@@ -671,20 +715,26 @@ void MergeTask::VerticalMergeStage::finalizeVerticalMergeForOneColumn() const
     global_ctx->merge_list_element_ptr->progress.store(ctx->progress_before + ctx->column_sizes->columnWeight(column_name), std::memory_order_relaxed);
 
     /// This is the external cycle increment.
-    ++ctx->column_num_for_vertical_merge;
+    ++ctx->column_num_for_vertical_merge; // 外部循环加1，准备处理下一列
     ++ctx->it_name_and_type;
 }
 
-
+/**
+ * 这是VerticalMergeStage的第三个task
+ * @return
+ */
 bool MergeTask::VerticalMergeStage::finalizeVerticalMergeForAllColumns() const
 {
     for (auto & stream : ctx->delayed_streams)
         stream->finish(ctx->need_sync);
 
-    return false;
+    return false; // 这个task执行结束。由于这是 VerticalMergeStage的最后一个task，因此如果还有下一个stage，那么就执行下一个stage
 }
 
-
+/**
+ * 这是 MergeProjectionsStage 的第一个task
+ * @return
+ */
 bool MergeTask::MergeProjectionsStage::mergeMinMaxIndexAndPrepareProjections() const
 {
     for (const auto & part : global_ctx->future_part->parts)
@@ -777,7 +827,10 @@ bool MergeTask::MergeProjectionsStage::mergeMinMaxIndexAndPrepareProjections() c
     return false;
 }
 
-
+/**
+ * 这个 MergeProjectionsStage 的第二个task
+ * @return
+ */
 bool MergeTask::MergeProjectionsStage::executeProjections() const
 {
     if (ctx->projections_iterator == ctx->tasks_for_projections.end())
@@ -790,7 +843,10 @@ bool MergeTask::MergeProjectionsStage::executeProjections() const
     return true;
 }
 
-
+/**
+ * 这是MergeProjectionsStage 的第三个task
+ * @return
+ */
 bool MergeTask::MergeProjectionsStage::finalizeProjectionsAndWholeMerge() const
 {
     for (const auto & task : ctx->tasks_for_projections)
@@ -810,40 +866,54 @@ bool MergeTask::MergeProjectionsStage::finalizeProjectionsAndWholeMerge() const
     return false;
 }
 
-
+/**
+ * 第二个stage的调用总入口，调用者是 bool MergeTask::execute()
+ * 上一个Stage是的总入口是 ExecuteAndFinalizeHorizontalPart::execute()
+ * @return
+ */
 bool MergeTask::VerticalMergeStage::execute()
 {
     assert(subtasks_iterator != subtasks.end());
     if ((*subtasks_iterator)())
-        return true;
+        return true; // 返回true，说明这个task需要重新执行
 
-    /// Move to the next subtask in an array of subtasks
+    /// 移动到下一个subtask
     ++subtasks_iterator;
-    return subtasks_iterator != subtasks.end();
+    return subtasks_iterator != subtasks.end(); // 如果后面已经没有更多的subtask了，返回false，如果后面还有更多的subtask，返回true
 }
 
+/**
+ * 第三个stage的执行总入口，调用者是 bool MergeTask::execute()
+ * 上一个Stage的总入口是 VerticalMergeStage::execute()
+ * @return
+ */
 bool MergeTask::MergeProjectionsStage::execute()
 {
     assert(subtasks_iterator != subtasks.end());
     if ((*subtasks_iterator)())
-        return true;
+        return true; // 返回true，说明这个task需要重新执行
 
-    /// Move to the next subtask in an array of subtasks
+    /// 移动到下一个subtask
     ++subtasks_iterator;
-    return subtasks_iterator != subtasks.end();
+    return subtasks_iterator != subtasks.end(); // 如果后面已经没有更多的subtask了，返回false，如果后面还有更多的subtask，返回true
 }
 
-
+/**
+ * 这是VerticalMergeStage的第二个task
+ * @return
+ */
 bool MergeTask::VerticalMergeStage::executeVerticalMergeForAllColumns() const
 {
     /// No need to execute this part if it is horizontal merge.
+    // 合并方式的选择，查看 MergeAlgorithm MergeTask::ExecuteAndFinalizeHorizontalPart::chooseMergeAlgorithm()
     if (global_ctx->chosen_merge_algorithm != MergeAlgorithm::Vertical)
         return false;
 
     /// This is the external cycle condition
+    /// 这是外部循环的控制条件，每次针对一个列处理了，column_num_for_vertical_merge就会+1
     if (ctx->column_num_for_vertical_merge >= global_ctx->gathering_column_names_size)
         return false;
-
+    // 对于每一列，都会一次经历下面的每一个state，然后进入下一列
     switch (ctx->vertical_merge_one_column_state)
     {
         case VerticalMergeRuntimeContext::State::NEED_PREPARE:
@@ -864,27 +934,32 @@ bool MergeTask::VerticalMergeStage::executeVerticalMergeForAllColumns() const
         {
             finalizeVerticalMergeForOneColumn();
             ctx->vertical_merge_one_column_state = VerticalMergeRuntimeContext::State::NEED_PREPARE;
-            return true;
+            return true; //  进入下一列的NEED_PREPARE状态
         }
     }
     return false;
 }
 
-
+/**
+ * 这个方法的调用是 return merge_task->execute();
+ * MergeTask::execute()
+ * @return
+ */
 bool MergeTask::execute()
 {
+    // 这是一个有效的Stage(即，上一个Stage不是最后一个Stage)
     assert(stages_iterator != stages.end());
-    if ((*stages_iterator)->execute())
-        return true;
-
-    /// Stage is finished, need initialize context for the next stage
+    if ((*stages_iterator)->execute()) // 执行当前的Stage，调用 ExecuteAndFinalizeHorizontalPart::execute(), VerticalMergeStage::execute(), MergeProjectionsStage::execute()
+        return true; // 返回true，代表需要重新执行，上层调用者也不会切换State，会再次执行当前的stages_iterator的(*stages_iterator)->execute()
+    // 返回false，代表这个Stage执行完成了，但是需要根据是否有下一个Stage来决定上层调用者来进入下一个State
+    // (*stages_iterator)->execute()返回false，说明当前的Stage结束了，需要初始化下一个Stage的Context
     auto next_stage_context = (*stages_iterator)->getContextForNextStage();
 
-    /// Move to the next stage in an array of stages
+    /// Move到下一个Stage
     ++stages_iterator;
-    if (stages_iterator == stages.end())
-        return false;
-
+    if (stages_iterator == stages.end()) // 没有下一个Stage了
+        return false; // 返回false，代表已经是最后一个Stage，那么调用者ReplicatedMergeMutateTaskBase::executeImpl()会进入下一个State
+    // 设置下一个Stage的context
     (*stages_iterator)->setRuntimeContext(std::move(next_stage_context), global_ctx);
     return true;
 }
@@ -921,14 +996,14 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
     /// Using unique_ptr, because MergeStageProgress has no default constructor
     global_ctx->horizontal_stage_progress = std::make_unique<MergeStageProgress>(
         ctx->column_sizes ? ctx->column_sizes->keyColumnsWeight() : 1.0);
-
+    // 为 merging_column_names中的每一个part构建一个Pipe
     for (const auto & part : global_ctx->future_part->parts)
     {
         Pipe pipe = createMergeTreeSequentialSource(
             *global_ctx->data,
             global_ctx->storage_snapshot,
             part,
-            global_ctx->merging_column_names,
+            global_ctx->merging_column_names, // 参考方法extractMergingAndGatheringColumns()查看merging_columns，主要包括排序列，索引列
             /*mark_ranges=*/ {},
             /*apply_deleted_mask=*/ true,
             ctx->read_with_direct_io,
@@ -992,6 +1067,7 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
 
     switch (ctx->merging_params.mode)
     {
+            //  普通的ReplicatedMergeTree对应的transform stream
         case MergeTreeData::MergingParams::Ordinary:
             merged_transform = std::make_shared<MergingSortedTransform>(
                 header,
@@ -1045,11 +1121,11 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
             break;
     }
 
-    auto res_pipe = Pipe::unitePipes(std::move(pipes));
-    res_pipe.addTransform(std::move(merged_transform));
+    auto res_pipe = Pipe::unitePipes(std::move(pipes)); // 将pipes中的所有Pipe集中到一个Pipe中
+    res_pipe.addTransform(std::move(merged_transform)); // 设置这个Pipe的transform
 
 #ifndef NDEBUG
-    if (!sort_description.empty())
+    if (!sort_description.empty()) // 添加排序的transform
     {
         res_pipe.addSimpleTransform([&](const Block & header_)
         {
@@ -1059,7 +1135,7 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
     }
 #endif
 
-    if (global_ctx->deduplicate)
+    if (global_ctx->deduplicate) // 添加与deduplicate相关的transform
     {
         /// We don't want to deduplicate by block number column
         /// so if deduplicate_by_columns is empty, add all columns except _block_number
@@ -1080,7 +1156,7 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
                 res_pipe.getHeader(), SizeLimits(), 0 /*limit_hint*/, global_ctx->deduplicate_by_columns));
     }
 
-    if (ctx->need_remove_expired_values)
+    if (ctx->need_remove_expired_values) // 添加TTLTransform
         res_pipe.addTransform(std::make_shared<TTLTransform>(
             res_pipe.getHeader(), *global_ctx->data, global_ctx->metadata_snapshot, global_ctx->new_data_part, global_ctx->time_of_merge, ctx->force_ttl));
 
@@ -1091,59 +1167,87 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
             res_pipe.getHeader(), indices.getSingleExpressionForIndices(global_ctx->metadata_snapshot->getColumns(), global_ctx->data->getContext())));
         res_pipe.addTransform(std::make_shared<MaterializingTransform>(res_pipe.getHeader()));
     }
-
+    // 基于刚刚构建的Pipe，构造一个基于Pull模式的QueryPipeline
+    // 搜索 QueryPipeline::QueryPipeline(Pipe pipe)
     global_ctx->merged_pipeline = QueryPipeline(std::move(res_pipe));
     /// Dereference unique_ptr and pass horizontal_stage_progress by reference
     global_ctx->merged_pipeline.setProgressCallback(MergeProgressCallback(global_ctx->merge_list_element_ptr, global_ctx->watch_prev_elapsed, *global_ctx->horizontal_stage_progress));
     /// Is calculated inside MergeProgressCallback.
     global_ctx->merged_pipeline.disableProfileEventUpdate();
-
+    // 基于QueryPipeline，构造PullingPipelineExecutor
     global_ctx->merging_executor = std::make_unique<PullingPipelineExecutor>(global_ctx->merged_pipeline);
 }
 
-
+// 选择合并方式
 MergeAlgorithm MergeTask::ExecuteAndFinalizeHorizontalPart::chooseMergeAlgorithm() const
 {
     const size_t total_rows_count = global_ctx->merge_list_element_ptr->total_rows_count;
     const size_t total_size_bytes_uncompressed = global_ctx->merge_list_element_ptr->total_size_bytes_uncompressed;
     const auto data_settings = global_ctx->data->getSettings();
 
-    if (global_ctx->deduplicate)
+    if (global_ctx->deduplicate) // 如果需要去重，选择水平合并，因为去重操作需要对完整的行进行处理。
         return MergeAlgorithm::Horizontal;
-    if (data_settings->enable_vertical_merge_algorithm == 0)
+    if (data_settings->enable_vertical_merge_algorithm == 0) // 如果配置中未启用垂直合并算法，那么选择水平合并。默认是启用的
         return MergeAlgorithm::Horizontal;
-    if (ctx->need_remove_expired_values)
+    if (ctx->need_remove_expired_values) //  如果需要移除过期的数据，选择水平合并，因为这是一个涉及行级别操作的任务。
         return MergeAlgorithm::Horizontal;
-    if (global_ctx->future_part->part_format.part_type != MergeTreeDataPartType::Wide)
-        return MergeAlgorithm::Horizontal;
+    if (global_ctx->future_part->part_format.part_type != MergeTreeDataPartType::Wide) // 垂直合并通常用于宽表（Wide表）格式，如果目标数据块不是宽表格式，则选择水平合并。
+        return MergeAlgorithm::Horizontal; // 如果目标格式不是wide格式，只能那么选择水平合并。但是，这并不意味着wide表就一定使用垂直合并
     if (global_ctx->future_part->part_format.storage_type != MergeTreeDataPartStorageType::Full)
+        return MergeAlgorithm::Horizontal; // 如果存储类型不是完整存储，只能选择水平合并，因为垂直合并通常需要完整存储支持。但是这并不意味着完整存储就一定是使用垂直合并
+    if (global_ctx->cleanup) // 进行清理操作，选择水平合并，因为清理通常涉及到整个行。但是这并不意味着非清理操作情况下一定使用垂直合并
         return MergeAlgorithm::Horizontal;
-    if (global_ctx->cleanup)
-        return MergeAlgorithm::Horizontal;
-
+    // 执行到这里，目标格式肯定是MergeTreeDataPartType::Wide格式，因为非Wide格式肯定已经返回成MergeAlgorithm::Horizontal
+    /**
+     *     M(Bool, allow_vertical_merges_from_compact_to_wide_parts, true, "Allows vertical merges from compact to wide parts.
+     *     This settings must have the same value on all replicas", 0) \
+     *     检查是否允许从紧凑格式（Compact）到宽格式（Wide）进行垂直合并，默认是允许
+     */
     if (!data_settings->allow_vertical_merges_from_compact_to_wide_parts)
     {
+        //  如果不允许从compact到wide表的转换，则检查所有参与合并的数据块是否为宽表格式。如果存在任何一个数据块不是宽表格式，选择水平合并。
         for (const auto & part : global_ctx->future_part->parts)
         {
-            if (!isWidePart(part))
+            if (!isWidePart(part)) // 假如有一个part是compact
+                // 选择水平合并。这里的理由是，source part里面有一个compact part，然后，我们期望合并成wide part，
+                // 可是现在我们不允许使用vertical merge来实现这个从compact -> wide的合并，因此只能使用Horizontal合并
                 return MergeAlgorithm::Horizontal;
+
         }
     }
 
+    // 只有下面的存储模式才支持垂直合并
+    // 我们创建的普通的MergeTree应该是Ordinary。参考 static StoragePtr create(const StorageFactory::Arguments & args)
     bool is_supported_storage =
         ctx->merging_params.mode == MergeTreeData::MergingParams::Ordinary ||
         ctx->merging_params.mode == MergeTreeData::MergingParams::Collapsing ||
         ctx->merging_params.mode == MergeTreeData::MergingParams::Replacing ||
         ctx->merging_params.mode == MergeTreeData::MergingParams::VersionedCollapsing;
-
+    /**
+     *  M(UInt64, vertical_merge_algorithm_min_columns_to_activate, 11, "Minimal amount of non-PK columns
+     *  to activate Vertical merge algorithm.", 0)
+     */
+    // 只有非pk列的数量超过11，才有可能使用垂直合并
     bool enough_ordinary_cols = global_ctx->gathering_columns.size() >= data_settings->vertical_merge_algorithm_min_columns_to_activate;
-
+    /**
+     *     M(UInt64, vertical_merge_algorithm_min_rows_to_activate, 16 * 8192, "Minimal (approximate) sum of rows in merging parts
+     *     to activate Vertical merge algorithm.", 0) \
+     *     只有总数据量大于128K，才会考虑使用vertical
+     */
     bool enough_total_rows = total_rows_count >= data_settings->vertical_merge_algorithm_min_rows_to_activate;
-
+    /**
+     *     M(UInt64, vertical_merge_algorithm_min_bytes_to_activate, 0, "Minimal (approximate) uncompressed size
+     *     in bytes in merging parts to activate Vertical merge algorithm.", 0) \
+     *     只有总数据量大于0，才会考虑使用vertical
+     */
     bool enough_total_bytes = total_size_bytes_uncompressed >= data_settings->vertical_merge_algorithm_min_bytes_to_activate;
-
+    /**
+     * 只有总的parts的数量少于127，才会考虑使用vertical
+     */
     bool no_parts_overflow = global_ctx->future_part->parts.size() <= RowSourcePart::MAX_PARTS;
-
+    /**
+     * 当上述条件都满足，才会使用vertical，否则使用horizontal
+     */
     auto merge_alg = (is_supported_storage && enough_total_rows && enough_total_bytes && enough_ordinary_cols && no_parts_overflow) ?
                         MergeAlgorithm::Vertical : MergeAlgorithm::Horizontal;
 

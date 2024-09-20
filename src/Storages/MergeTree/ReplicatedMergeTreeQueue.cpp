@@ -1460,7 +1460,7 @@ bool ReplicatedMergeTreeQueue::shouldExecuteLogEntry(
         {
             ignore_max_size = max_source_parts_size == data_settings->max_bytes_to_merge_at_max_space_in_pool;
 
-            if (isTTLMergeType(entry.merge_type))
+            if (isTTLMergeType(entry.merge_type)) // 在createLogEntryToMergeParts中设置的merge_type
             {
                 if (merger_mutator.ttl_merges_blocker.isCancelled())
                 {
@@ -1782,7 +1782,8 @@ ReplicatedMergeTreeQueue::OperationsInQueue ReplicatedMergeTreeQueue::countMerge
         if (entry->type == ReplicatedMergeTreeLogEntry::MERGE_PARTS)
         {
             ++count_merges;
-            if (isTTLMergeType(entry->merge_type))
+            // TTLMergeType是MERGE_PARTS中的一种特殊情况
+            if (isTTLMergeType(entry->merge_type)) // 在 createLogEntryToMergeParts()中设置的merge_type
                 ++count_merges_with_ttl;
         }
         else if (entry->type == ReplicatedMergeTreeLogEntry::MUTATE_PART)

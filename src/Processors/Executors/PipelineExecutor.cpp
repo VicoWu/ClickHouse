@@ -33,7 +33,11 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
 }
 
-
+/**
+ * 在bool PullingPipelineExecutor::pull(Chunk & chunk)中构造的，根据QueryPipeline构造对应的PipelineExecutor
+ * @param processors
+ * @param elem
+ */
 PipelineExecutor::PipelineExecutor(std::shared_ptr<Processors> & processors, QueryStatusPtr elem)
     : process_list_element(std::move(elem))
 {
@@ -131,11 +135,16 @@ void PipelineExecutor::execute(size_t num_threads, bool concurrency_control)
     finalizeExecution();
 }
 
+/**
+ * 在 bool PullingPipelineExecutor::pull(Chunk & chunk) 中调用
+ * @param yield_flag
+ * @return
+ */
 bool PipelineExecutor::executeStep(std::atomic_bool * yield_flag)
 {
-    if (!is_execution_initialized)
+    if (!is_execution_initialized) // 还没有初始化
     {
-        initializeExecution(1, true);
+        initializeExecution(1, true); // 单线程
 
         // Acquire slot until we are done
         single_thread_slot = slots->tryAcquire();
@@ -145,10 +154,10 @@ bool PipelineExecutor::executeStep(std::atomic_bool * yield_flag)
             return true;
     }
 
-    executeStepImpl(0, yield_flag);
+    executeStepImpl(0, yield_flag); // void PipelineExecutor::executeStepImpl
 
     if (!tasks.isFinished())
-        return true;
+        return true; // 返回true，说
 
     /// Execution can be stopped because of exception. Check and rethrow if any.
     for (auto & node : graph->nodes)

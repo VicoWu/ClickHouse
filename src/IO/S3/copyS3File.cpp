@@ -239,7 +239,7 @@ namespace
             S3::checkObjectExists(*client_ptr, dest_bucket, dest_key, {}, request_settings, {}, "Immediately after upload");
             LOG_TRACE(log, "Object {} exists after upload", dest_key);
         }
-
+        // 这是可以通过thread pool进行并发上传
         void performMultipartUpload(size_t start_offset, size_t size)
         {
             calculatePartSize(size);
@@ -259,7 +259,7 @@ namespace
                     size_t part_size = next_position - position; /// `part_size` is either `normal_part_size` or smaller if it's the final part.
 
                     Stopwatch watch;
-                    uploadPart(part_number, position, part_size);
+                    uploadPart(part_number, position, part_size); // 使用线程池中的独立线程进行调度
                     watch.stop();
 
                     ProfileEvents::increment(ProfileEvents::WriteBufferFromS3Bytes, part_size);
@@ -336,6 +336,12 @@ namespace
             normal_part_size = part_size;
         }
 
+        /**
+         * 这个方法只是在multi-part的时候有用，每一个part都可以并行上传
+         * @param part_number
+         * @param part_offset
+         * @param part_size
+         */
         void uploadPart(size_t part_number, size_t part_offset, size_t part_size)
         {
             LOG_TRACE(log, "Writing part. Bucket: {}, Key: {}, Upload_id: {}, Size: {}", dest_bucket, dest_key, multipart_upload_id, part_size);
@@ -372,7 +378,7 @@ namespace
                 try
                 {
                     task->req = fillUploadPartRequest(part_number, part_offset, part_size);
-
+                    // 使用一个独立线程上传这个part
                     schedule([this, task, task_finish_notify]()
                     {
                         try
@@ -466,7 +472,9 @@ namespace
             , size(size_)
         {
         }
-
+        /**
+         * CopyDataToFileHelper::performCopy()
+         */
         void performCopy()
         {
             if (size <= upload_settings.max_single_part_upload_size)
@@ -482,7 +490,8 @@ namespace
         std::function<std::unique_ptr<SeekableReadBuffer>()> create_read_buffer;
         size_t offset;
         size_t size;
-
+        // 通过代码看到，如果不是multipart upload，那么使用的是单线程，没有使用线程池
+        // 如果使用的multipart upload，那么使用的是线程池
         void performSinglepartUpload()
         {
             S3::PutObjectRequest request;
@@ -522,7 +531,7 @@ namespace
                     ProfileEvents::increment(ProfileEvents::DiskS3PutObject);
 
                 Stopwatch watch;
-                auto outcome = client_ptr->PutObject(request);
+                auto outcome = client_ptr->PutObject(request); // 通过S3客户端上传并获取结果
                 watch.stop();
                 if (blob_storage_log)
                     blob_storage_log->addEvent(BlobStorageLogElement::EventType::Upload,
