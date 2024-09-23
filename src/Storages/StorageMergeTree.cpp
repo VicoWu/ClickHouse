@@ -929,15 +929,15 @@ MergeMutateSelectedEntryPtr StorageMergeTree::selectPartsToMerge(
 
     SelectPartsDecision select_decision = SelectPartsDecision::CANNOT_SELECT;
 
-    if (!canEnqueueBackgroundTask())
-    {
+    if (!canEnqueueBackgroundTask()) //内存是否受限。这个对于ReplicatedMergeTree也是一样的限制
+    { // 不能再执行更多的task了
         if (out_disable_reason)
             *out_disable_reason = fmt::format("Current background tasks memory usage ({}) is more than the limit ({})",
                 formatReadableSizeWithBinarySuffix(background_memory_tracker.get()),
                 formatReadableSizeWithBinarySuffix(background_memory_tracker.getSoftLimit()));
     }
     else if (partition_id.empty())
-    {
+    { // partition id是空的
         UInt64 max_source_parts_size = merger_mutator.getMaxSourcePartsSizeForMerge();
         bool merge_with_ttl_allowed = getTotalMergesWithTTLInMergeList() < data_settings->max_number_of_merges_with_ttl_in_pool;
 
@@ -959,7 +959,7 @@ MergeMutateSelectedEntryPtr StorageMergeTree::selectPartsToMerge(
             *out_disable_reason = "Current value of max_source_parts_size is zero";
     }
     else
-    {
+    { // partition id不是空的
         while (true)
         {
             select_decision = merger_mutator.selectAllPartsToMergeWithinPartition(
@@ -1063,7 +1063,7 @@ bool StorageMergeTree::merge(
         *this, metadata_snapshot, deduplicate, deduplicate_by_columns, cleanup, merge_mutate_entry, table_lock_holder, f);
 
     task->setCurrentTransaction(MergeTreeTransactionHolder{}, MergeTreeTransactionPtr{txn});
-
+    // [[ maybe_unused]] static MergeTreeData::MutableDataPartPtr executeHere(MergeTaskPtr task)
     executeHere(task);
 
     return true;
@@ -1251,6 +1251,10 @@ UInt32 StorageMergeTree::getMaxLevelInBetween(const DataPartPtr & left, const Da
     return level;
 }
 
+/**
+ * 这是进行merge/muate的调度的入口
+ * 查看 void BackgroundJobsAssignee::threadFunc()
+ */
 bool StorageMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assignee)
 {
     if (shutdown_called)
@@ -1290,6 +1294,7 @@ bool StorageMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assign
     {
         auto task = std::make_shared<MergePlainMergeTreeTask>(*this, metadata_snapshot, /* deduplicate */ false, Names{}, /* cleanup */ false, merge_entry, shared_lock, common_assignee_trigger);
         task->setCurrentTransaction(std::move(transaction_for_merge), std::move(txn));
+        // 调用 bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
         bool scheduled = assignee.scheduleMergeMutateTask(task);
         /// The problem that we already booked a slot for TTL merge, but a merge list entry will be created only in a prepare method
         /// in MergePlainMergeTreeTask. So, this slot will never be freed.
@@ -1303,7 +1308,7 @@ bool StorageMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assign
         /// which is equal or more fresh than commands themselves. In extremely rare case it can happen that we will have alter
         /// in between we took snapshot above and selected commands. That is why we take new snapshot here.
         auto task = std::make_shared<MutatePlainMergeTreeTask>(*this, getInMemoryMetadataPtr(), mutate_entry, shared_lock, common_assignee_trigger);
-        assignee.scheduleMergeMutateTask(task);
+        assignee.scheduleMergeMutateTask(task); // 调用 bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
         return true;
     }
     if (has_mutations)

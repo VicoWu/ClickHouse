@@ -1160,6 +1160,7 @@ protected:
     /// Another explanation is that moving operations are common for Replicated and Plain MergeTree classes.
     /// Task that schedules this operations is executed with its own timetable and triggered in a specific places in code.
     /// And for ReplicatedMergeTree we don't have LogEntry type for this operation.
+    // 我们从MergeTreeData::MergeTreeData构造方法可以看到，每一个MergeTreeData都有各自独立的BackgroundJobsAssignee对象
     BackgroundJobsAssignee background_operations_assignee;
     BackgroundJobsAssignee background_moves_assignee;
     bool use_metadata_cache;

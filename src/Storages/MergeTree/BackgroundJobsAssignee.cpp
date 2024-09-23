@@ -54,6 +54,7 @@ void BackgroundJobsAssignee::postpone()
 
 bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
 {
+    // 返回对应的 MergeTreeBackgroundExecutor::trySchedule
     bool res = getContext()->getMergeMutateExecutor()->trySchedule(merge_task);
     res ? trigger() : postpone();
     return res;
@@ -99,7 +100,7 @@ void BackgroundJobsAssignee::start()
     if (!holder)
         holder = getContext()->getSchedulePool().createTask("BackgroundJobsAssignee:" + toString(type), [this]{ threadFunc(); });
 
-    holder->activateAndSchedule();
+    holder->activateAndSchedule(); //开始调度
 }
 
 void BackgroundJobsAssignee::finish()
@@ -125,8 +126,9 @@ try
     bool succeed = false;
     switch (type)
     {
+            // 每一个BackgroundJobsAssignee都属于某一个独立的MergeTreeData(StorageReplicatedMergeTree or ReplicatedMergeTree)
         case Type::DataProcessing:
-            succeed = data.scheduleDataProcessingJob(*this);
+            succeed = data.scheduleDataProcessingJob(*this); // 可能调用 StorageMergeTree::scheduleDataProcessingJob或者 StorageReplicatedMergeTree::scheduleDataProcessingJob
             break;
         case Type::Moving:
             succeed = data.scheduleDataMovingJob(*this);

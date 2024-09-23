@@ -3220,13 +3220,13 @@ bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssigne
     else if (job_type == LogEntry::MERGE_PARTS)
     {
         auto task = std::make_shared<MergeFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
-        assignee.scheduleMergeMutateTask(task);
+        assignee.scheduleMergeMutateTask(task); // 调用 bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
         return true;
     }
     else if (job_type == LogEntry::MUTATE_PART)
     {
         auto task = std::make_shared<MutateFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
-        assignee.scheduleMergeMutateTask(task);
+        assignee.scheduleMergeMutateTask(task); // 调用  bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
         return true;
     }
     else
