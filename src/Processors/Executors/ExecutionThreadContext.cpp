@@ -39,7 +39,11 @@ static bool checkCanAddAdditionalInfoToException(const DB::Exception & exception
            && exception.code() != ErrorCodes::QUOTA_EXCEEDED
            && exception.code() != ErrorCodes::QUERY_WAS_CANCELLED;
 }
-
+/**
+ * 这是 ExecutionThreadContext::executeJob方法，这里执行的时候，会调用对应的callback，比如,封装了MergeReadProgressCallback的ReadProgressCallback
+ * @param node
+ * @param read_progress_callback
+ */
 static void executeJob(ExecutingGraph::Node * node, ReadProgressCallback * read_progress_callback)
 {
     try

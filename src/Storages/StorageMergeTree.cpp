@@ -939,19 +939,25 @@ MergeMutateSelectedEntryPtr StorageMergeTree::selectPartsToMerge(
     else if (partition_id.empty())
     { // partition id是空的
         UInt64 max_source_parts_size = merger_mutator.getMaxSourcePartsSizeForMerge();
+        // 最多可以有的ttl的数量， max_number_of_merges_with_ttl_in_pool是2， getTotalMergesWithTTLInMergeList()返回的是所有表的merges
+        // 如果当前的TTL Merge的数量超过了这个数量2，那么就不允许进行更多的TTL Merge，这样是避免过多的TTL Merge影响了正常的merge而造成too many parts的问题
+        // 只要数量上还允许ttl merge，那么merger_mutator.selectPartsToMerge就会优先考虑TTL Merge
         bool merge_with_ttl_allowed = getTotalMergesWithTTLInMergeList() < data_settings->max_number_of_merges_with_ttl_in_pool;
 
         /// TTL requirements is much more strict than for regular merge, so
         /// if regular not possible, than merge with ttl is not also not
         /// possible.
-        if (max_source_parts_size > 0)
+        // TTL发生的条件比普通的merge的条件更加苛刻，因此如果max_source_parts_size<=0导致无法进行regular merge，那么肯定也无法进行TTL Merge
+        if (max_source_parts_size > 0) // 如果当前计算的最大source parts大于0，即还有可以合并的余地
         {
+            //  返回的只是merge的最后决定
+            // 搜索 MergeTreeDataMergerMutator::selectPartsToMerge 查看调用
             select_decision = merger_mutator.selectPartsToMerge(
-                future_part,
+                future_part, // 选取的结果放在future_part中
                 aggressive,
                 max_source_parts_size,
                 can_merge,
-                merge_with_ttl_allowed,
+                merge_with_ttl_allowed, // 是否允许进行ttl merge，如果允许，那么会优先为ttl merge选定parts
                 txn,
                 out_disable_reason);
         }
@@ -1290,7 +1296,7 @@ bool StorageMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assign
         has_mutations = !current_mutations_by_version.empty();
     }
 
-    if (merge_entry)
+    if (merge_entry) // 如果有MergeEntry，即存在需要进行的merge操作
     {
         auto task = std::make_shared<MergePlainMergeTreeTask>(*this, metadata_snapshot, /* deduplicate */ false, Names{}, /* cleanup */ false, merge_entry, shared_lock, common_assignee_trigger);
         task->setCurrentTransaction(std::move(transaction_for_merge), std::move(txn));

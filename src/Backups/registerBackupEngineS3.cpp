@@ -94,7 +94,7 @@ void registerBackupEngineS3(BackupFactory & factory)
             if (params.is_internal_backup)
                 throw Exception(ErrorCodes::SUPPORT_IS_DISABLED, "Using archives with backups on clusters is disabled");
 
-            archive_params.archive_name = removeFileNameFromURL(s3_uri);
+            archive_params.archive_name = removeFileNameFromURL(s3_uri); // 这时候使用archive name,那么就无法进行多线程
             archive_params.compression_method = params.compression_method;
             archive_params.compression_level = params.compression_level;
             archive_params.password = params.password;
@@ -107,11 +107,12 @@ void registerBackupEngineS3(BackupFactory & factory)
 
         if (params.open_mode == IBackup::OpenMode::READ)
         {
+            // 这里的读指的是从S3读，即restore的过程
             auto reader = std::make_shared<BackupReaderS3>(S3::URI{s3_uri}, access_key_id, secret_access_key, params.context);
             return std::make_unique<BackupImpl>(backup_name_for_logging, archive_params, params.base_backup_info, reader, params.context);
         }
         else
-        {
+        { // 这里的写指的是向S3写，即Backup的过程
             auto writer = std::make_shared<BackupWriterS3>(S3::URI{s3_uri}, access_key_id, secret_access_key, params.context);
             return std::make_unique<BackupImpl>(
                 backup_name_for_logging,

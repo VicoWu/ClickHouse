@@ -249,6 +249,7 @@ OperationID BackupsWorker::startMakingBackup(const ASTPtr & query, const Context
 
         if (backup_settings.async)
         {
+            // This will generate a backup thread. And inside doBackup()， it will use one dedidate backup thread for each backup entry
             backups_thread_pool->scheduleOrThrowOnError(
                 [this, backup_query, backup_id, backup_name_for_logging, backup_info, backup_settings, backup_coordination, context_in_use, mutable_context]
                 {
@@ -290,7 +291,18 @@ OperationID BackupsWorker::startMakingBackup(const ASTPtr & query, const Context
     }
 }
 
-
+/**
+ * 这个方法只负责backup，对应的restore方法在 doRestore
+ * @param backup_query
+ * @param backup_id
+ * @param backup_name_for_logging
+ * @param backup_info
+ * @param backup_settings
+ * @param backup_coordination
+ * @param context
+ * @param mutable_context
+ * @param called_async
+ */
 void BackupsWorker::doBackup(
     const std::shared_ptr<ASTBackupQuery> & backup_query,
     const OperationID & backup_id,
@@ -383,6 +395,7 @@ void BackupsWorker::doBackup(
 
             /// Write the backup entries to the backup.
             buildFileInfosForBackupEntries(backup, backup_entries, backup_coordination);
+            //  There will be one backup thread for each backup entry
             writeBackupEntries(backup, std::move(backup_entries), backup_id, backup_coordination, backup_settings.internal);
 
             /// We have written our backup entries, we need to tell other hosts (they could be waiting for it).
@@ -440,7 +453,15 @@ void BackupsWorker::buildFileInfosForBackupEntries(const BackupPtr & backup, con
     backup_coordination->addFileInfos(::DB::buildFileInfosForBackupEntries(backup_entries, backup->getBaseBackup(), *backups_thread_pool));
 }
 
-
+/**
+ * 从这里看到，每一个BackupEntry都会有一个Job运行。所以，如果我们提交一个backup query，这个backup query会被一个thread执行doBackup()，
+ * 同时，这个thread的doBackup中会根据Backup entry分解成为更多的Thread，最后，这些thread共享背后的IO Threads
+ * @param backup
+ * @param backup_entries
+ * @param backup_id
+ * @param backup_coordination
+ * @param internal
+ */
 void BackupsWorker::writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries, const OperationID & backup_id, std::shared_ptr<IBackupCoordination> backup_coordination, bool internal)
 {
     LOG_TRACE(log, "{}, num backup entries={}", Stage::WRITING_BACKUP, backup_entries.size());
@@ -462,6 +483,7 @@ void BackupsWorker::writeBackupEntries(BackupMutablePtr backup, BackupEntries &&
     std::condition_variable event;
     std::exception_ptr exception;
 
+    // 如果是往一个archive中写入backup，那么就不止multiple thread，查看 bool supportsWritingInMultipleThreads()
     bool always_single_threaded = !backup->supportsWritingInMultipleThreads();
     auto thread_group = CurrentThread::getGroup();
 
@@ -524,6 +546,7 @@ void BackupsWorker::writeBackupEntries(BackupMutablePtr backup, BackupEntries &&
             }
         };
 
+        // 如果必须单线程，或者虽然多线程，但是backups_thread_pool调度失败，那么就在当前线程中执行
         if (always_single_threaded || !backups_thread_pool->trySchedule([job] { job(true); }))
             job(false);
     }
@@ -648,7 +671,7 @@ void BackupsWorker::doRestore(
         backup_open_params.backup_info = backup_info;
         backup_open_params.base_backup_info = restore_settings.base_backup_info;
         backup_open_params.password = restore_settings.password;
-        BackupPtr backup = BackupFactory::instance().createBackup(backup_open_params);
+        BackupPtr backup = BackupFactory::instance().createBackup(backup_open_params); // 这里的实例是BackupIO_S3.cpp
 
         String current_database = context->getCurrentDatabase();
         /// Checks access rights if this is ON CLUSTER query.
@@ -724,6 +747,7 @@ void BackupsWorker::doRestore(
             }
 
             /// Execute the data restoring tasks.
+            // 用来执行所生成的restore task,每一个task会有restores_thread_pool中的一个独立的thread来执行
             restoreTablesData(restore_id, backup, std::move(data_restore_tasks), *restores_thread_pool);
 
             /// We have restored everything, we need to tell other hosts (they could be waiting for it).

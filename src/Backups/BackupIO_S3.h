@@ -14,6 +14,7 @@ namespace DB
 {
 
 /// Represents a backup stored to AWS S3.
+// 从S3上恢复数据，对应了restore的过程
 class BackupReaderS3 : public BackupReaderDefault
 {
 public:
@@ -34,7 +35,7 @@ private:
     const DataSourceDescription data_source_description;
 };
 
-
+// 往S3上写数据，对应了backup的过程
 class BackupWriterS3 : public BackupWriterDefault
 {
 public:

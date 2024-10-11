@@ -54,7 +54,8 @@ bool MergePlainMergeTreeTask::executeStep()
         {
             try
             {
-                if (merge_task->execute())
+                // 搜索 bool MergeTask::execute()
+                if (merge_task->execute()) //如果execute返回false，那么会进入 NEED_FINISH，否则，还是在NEED_EXECUTE状态
                     return true;
 
                 state = State::NEED_FINISH;

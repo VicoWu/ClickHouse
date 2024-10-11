@@ -25,7 +25,10 @@ namespace ErrorCodes
     extern const int INVALID_CONFIG_PARAMETER;
 }
 
-
+/**
+ *
+构造方法查看  shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
+ */
 template <class Queue>
 MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     String name_,
@@ -35,9 +38,9 @@ MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     CurrentMetrics::Metric max_tasks_metric_,
     std::string_view policy)
     : name(name_)
-    , threads_count(threads_count_)
-    , max_tasks_count(max_tasks_count_)
-    , metric(metric_)
+    , threads_count(threads_count_) // 16
+    , max_tasks_count(max_tasks_count_) // 16 * 2
+    , metric(metric_)  // 0
     , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // active + pending
     , pool(std::make_unique<ThreadPool>(
           CurrentMetrics::MergeTreeBackgroundExecutorThreads, CurrentMetrics::MergeTreeBackgroundExecutorThreadsActive))

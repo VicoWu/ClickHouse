@@ -42,9 +42,12 @@ const Block & PullingPipelineExecutor::getHeader() const
 
 bool PullingPipelineExecutor::pull(Chunk & chunk)
 {
+    // 如果当前还没有executor，那么就构造一个PipelineExecutor executor，同时将对应的ReadProgressCallback设置进去
     if (!executor)
     {
         executor = std::make_shared<PipelineExecutor>(pipeline.processors, pipeline.process_list_element);
+        // using PipelineExecutorPtr = std::shared_ptr<PipelineExecutor>;
+        // 搜索 PipelineExecutor::setReadProgressCallback
         executor->setReadProgressCallback(pipeline.getReadProgressCallback());
     }
 

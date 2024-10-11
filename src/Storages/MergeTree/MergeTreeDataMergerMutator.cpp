@@ -88,20 +88,23 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartsSizeForMerge(size_t max_coun
             "Logical error: invalid argument passed to getMaxSourcePartsSize: scheduled_tasks_count = {} > max_count = {}",
             scheduled_tasks_count, max_count);
     }
-
-    size_t free_entries = max_count - scheduled_tasks_count;
+    // 剩余可调度的task的数量
+    size_t free_entries = max_count - scheduled_tasks_count; // 在pool size = 16的时候，max_count = 16 * 2(ratio) = 32
     const auto data_settings = data.getSettings();
 
     /// Always allow maximum size if one or less pool entries is busy.
     /// One entry is probably the entry where this function is executed.
     /// This will protect from bad settings.
     UInt64 max_size = 0;
+    // 如果剩余可调度的task的数量大于number_of_free_entries_in_pool_to_lower_max_size_of_merge(默认为8)，那么，最大的size不设置限制
     if (scheduled_tasks_count <= 1 || free_entries >= data_settings->number_of_free_entries_in_pool_to_lower_max_size_of_merge)
         max_size = data_settings->max_bytes_to_merge_at_max_space_in_pool;
     else
+        // 如果剩余可调度的task的数量已经不足(小于8)， 那么，就根据当前的剩余量在最小值和最大值之间做插值
+        // 即，剩余越大，那么允许进行merge的所有source parts的总size越大，反之越小
         max_size = static_cast<UInt64>(interpolateExponential(
-            data_settings->max_bytes_to_merge_at_min_space_in_pool,
-            data_settings->max_bytes_to_merge_at_max_space_in_pool,
+            data_settings->max_bytes_to_merge_at_min_space_in_pool, // 1MB
+            data_settings->max_bytes_to_merge_at_max_space_in_pool, // 150GB
             static_cast<double>(free_entries) / data_settings->number_of_free_entries_in_pool_to_lower_max_size_of_merge));
 
     return std::min(max_size, static_cast<UInt64>(data.getStoragePolicy()->getMaxUnreservedFreeSpace() / DISK_USAGE_COEFFICIENT_TO_SELECT));
@@ -132,9 +135,9 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
 SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMerge(
     FutureMergedMutatedPartPtr future_part,
     bool aggressive,
-    size_t max_total_size_to_merge,
+    size_t max_total_size_to_merge, // 最大允许的source parts的数量之和
     const AllowedMergingPredicate & can_merge_callback,
-    bool merge_with_ttl_allowed,
+    bool merge_with_ttl_allowed, // 是否允许进行TTL Merge
     const MergeTreeTransactionPtr & txn,
     String * out_disable_reason,
     const PartitionIdsHint * partitions_hint)
@@ -436,9 +439,9 @@ MergeTreeDataMergerMutator::MergeSelectingInfo MergeTreeDataMergerMutator::getPo
 }
 
 SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
-    FutureMergedMutatedPartPtr future_part,
+    FutureMergedMutatedPartPtr future_part, // 这个参数中存放了选择的parts的具体信息
     bool aggressive,
-    size_t max_total_size_to_merge,
+    size_t max_total_size_to_merge, // 最大允许的source parts的总大小之和
     bool merge_with_ttl_allowed,
     const StorageMetadataPtr & metadata_snapshot,
     const IMergeSelector::PartsRanges & parts_ranges,
@@ -448,7 +451,7 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
 {
     const auto data_settings = data.getSettings();
     IMergeSelector::PartsRange parts_to_merge;
-
+    // 在这里，如果允许ttl merge，那么先为TTL Merge进行相关计算。但是，全局总的TTL Merge的数量不可以超过2
     if (metadata_snapshot->hasAnyTTL() && merge_with_ttl_allowed && !ttl_merges_blocker.isCancelled())
     {
         /// TTL delete is preferred to recompression
@@ -461,11 +464,11 @@ SelectPartsDecision MergeTreeDataMergerMutator::selectPartsToMergeFromRanges(
 
         /// The size of the completely expired part of TTL drop is not affected by the merge pressure and the size of the storage space
         parts_to_merge = drop_ttl_selector.select(parts_ranges, data_settings->max_bytes_to_merge_at_max_space_in_pool);
-        if (!parts_to_merge.empty())
+        if (!parts_to_merge.empty()) // 如果选择出来了可以直接drop的part，那么就可以进行TTL Merge
         {
             future_part->merge_type = MergeType::TTLDelete;
         }
-        else if (!data_settings->ttl_only_drop_parts)
+        else if (!data_settings->ttl_only_drop_parts) // 如果没有选择出来可以直接drop的part，并且系统设置的TTL方式为 允许进行delete类型的ttl(默认是false，即既允许drop也允许delete)，那么就尝试进行delete
         {
             TTLDeleteMergeSelector delete_ttl_selector(
                 next_delete_ttl_merge_times_by_partition,

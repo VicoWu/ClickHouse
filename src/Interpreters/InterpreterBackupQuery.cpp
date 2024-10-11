@@ -36,7 +36,7 @@ namespace
 BlockIO InterpreterBackupQuery::execute()
 {
     auto & backups_worker = context->getBackupsWorker();
-    auto id = backups_worker.start(query_ptr, context);
+    auto id = backups_worker.start(query_ptr, context); // BackupWorkers::start
 
     auto info = backups_worker.getInfo(id);
     if (info.exception)

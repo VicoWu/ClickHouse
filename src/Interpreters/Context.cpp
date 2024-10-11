@@ -4101,13 +4101,14 @@ void Context::initializeBackgroundExecutorsIfNeeded()
     size_t background_common_pool_size = server_settings.background_common_pool_size;
 
     /// With this executor we can execute more tasks than threads we have
+    /// MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
     (
         "MergeMutate",
-        /*max_threads_count*/background_pool_size,
-        /*max_tasks_count*/background_pool_max_tasks_count,
-        CurrentMetrics::BackgroundMergesAndMutationsPoolTask,
-        CurrentMetrics::BackgroundMergesAndMutationsPoolSize,
+        /*max_threads_count*/background_pool_size, // 16
+        /*max_tasks_count*/background_pool_max_tasks_count, // 16 * 2
+        CurrentMetrics::BackgroundMergesAndMutationsPoolTask, // 0
+        CurrentMetrics::BackgroundMergesAndMutationsPoolSize, // background_pool_max_tasks_count * 2
         background_merges_mutations_scheduling_policy
     );
     LOG_INFO(shared->log, "Initialized background executor for merges and mutations with num_threads={}, num_tasks={}, scheduling_policy={}",

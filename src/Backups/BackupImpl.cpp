@@ -75,7 +75,7 @@ namespace
     }
 }
 
-
+// 读取时候的构造方法，即进行restore时候的构造方法
 BackupImpl::BackupImpl(
     const String & backup_name_for_logging_,
     const ArchiveParams & archive_params_,
@@ -83,10 +83,11 @@ BackupImpl::BackupImpl(
     std::shared_ptr<IBackupReader> reader_,
     const ContextPtr & context_)
     : backup_name_for_logging(backup_name_for_logging_)
-    , use_archive(!archive_params_.archive_name.empty())
+    // 搜索  archive_params.archive_name
+    , use_archive(!archive_params_.archive_name.empty()) // 主要看是否使用arcive进行备份，如果使用archive，则无法进行多线程
     , archive_params(archive_params_)
     , open_mode(OpenMode::READ)
-    , reader(std::move(reader_))
+    , reader(std::move(reader_)) // 读取的具体实现类，比如 BackupReaderS3
     , is_internal_backup(false)
     , version(INITIAL_BACKUP_VERSION)
     , base_backup_info(base_backup_info_)
@@ -95,6 +96,7 @@ BackupImpl::BackupImpl(
 }
 
 
+// 写入时候的构造方法，即进行backup的构造方法
 BackupImpl::BackupImpl(
     const String & backup_name_for_logging_,
     const ArchiveParams & archive_params_,
@@ -109,7 +111,7 @@ BackupImpl::BackupImpl(
     , use_archive(!archive_params_.archive_name.empty())
     , archive_params(archive_params_)
     , open_mode(OpenMode::WRITE)
-    , writer(std::move(writer_))
+    , writer(std::move(writer_)) // 写入的具体实现类，比如 BackupWriterS3
     , is_internal_backup(is_internal_backup_)
     , coordination(coordination_)
     , uuid(backup_uuid_)
@@ -157,7 +159,7 @@ void BackupImpl::open(const ContextPtr & context)
         openArchive();
 
     if (open_mode == OpenMode::READ)
-        readBackupMetadata();
+        readBackupMetadata(); // 先读取相关的元数据信息，这里的元数据信息是备份的时候写入的,这里会读取到BackupImpl对象中
 
     if (base_backup_info)
     {
@@ -274,6 +276,9 @@ UInt64 BackupImpl::getNumReadBytes() const
     return num_read_bytes;
 }
 
+/**
+ * 备份的时候写入元数据信息
+ */
 void BackupImpl::writeBackupMetadata()
 {
     assert(!is_internal_backup);
@@ -281,9 +286,9 @@ void BackupImpl::writeBackupMetadata()
     checkLockFile(true);
 
     std::unique_ptr<WriteBuffer> out;
-    if (use_archive)
+    if (use_archive) // 如果是archive模式
         out = archive_writer->writeFile(".backup");
-    else
+    else // 不是archive模式，就是用正常传入的Writer，  //  auto writer = std::make_shared<BackupWriterS3>(S3::URI{s3_uri}, access_key_id, secret_access_key, params.context);
         out = writer->writeFile(".backup");
 
     *out << "<config>";
@@ -297,17 +302,18 @@ void BackupImpl::writeBackupMetadata()
     if (all_file_infos.empty())
         throw Exception(ErrorCodes::BACKUP_IS_EMPTY, "Backup must not be empty");
 
-    if (base_backup_info)
+    if (base_backup_info) // 如果有base back信息，即这个是一个需要依赖base的增量备份
     {
         bool base_backup_in_use = false;
         for (const auto & info : all_file_infos)
         {
-            if (info.base_size)
+            if (info.base_size) // 只要有一个文件有base_size，那么就使用base_backup
                 base_backup_in_use = true;
         }
 
         if (base_backup_in_use)
         {
+            // 写入这一次备份的base的信息
             *out << "<base_backup>" << xml << base_backup_info->toString() << "</base_backup>";
             *out << "<base_backup_uuid>" << toString(*base_backup_uuid) << "</base_backup_uuid>";
         }
@@ -319,22 +325,22 @@ void BackupImpl::writeBackupMetadata()
     size_of_entries = 0;
 
     *out << "<contents>";
-    for (const auto & info : all_file_infos)
+    for (const auto & info : all_file_infos) // 遍历每一个需要备份的文件信息
     {
         *out << "<file>";
 
         *out << "<name>" << xml << info.file_name << "</name>";
-        *out << "<size>" << info.size << "</size>";
+        *out << "<size>" << info.size << "</size>"; // 写入info.size，这里的info.size是这个文件的增量+全量的大小
 
         if (info.size)
         {
             *out << "<checksum>" << hexChecksum(info.checksum) << "</checksum>";
-            if (info.base_size)
+            if (info.base_size) // 如果当前文件有base的信息，即这是一个全量文件信息
             {
                 *out << "<use_base>true</use_base>";
                 if (info.base_size != info.size)
                 {
-                    *out << "<base_size>" << info.base_size << "</base_size>";
+                    *out << "<base_size>" << info.base_size << "</base_size>";// 写入增量大小信息
                     *out << "<base_checksum>" << hexChecksum(info.base_checksum) << "</base_checksum>";
                 }
             }
@@ -344,12 +350,12 @@ void BackupImpl::writeBackupMetadata()
                 *out << "<encrypted_by_disk>true</encrypted_by_disk>";
         }
 
-        total_size += info.size;
+        total_size += info.size; // 在增量备份的场景下，这里累加的是全部的信息，包括增量和全量
         bool has_entry = !deduplicate_files || (info.size && (info.size != info.base_size) && (info.data_file_name.empty() || (info.data_file_name == info.file_name)));
         if (has_entry)
         {
             ++num_entries;
-            size_of_entries += info.size - info.base_size;
+            size_of_entries += info.size - info.base_size;  // size_of_entries代表的是增量的时候这个增量文件的大小部分
         }
 
         *out << "</file>";
@@ -363,7 +369,9 @@ void BackupImpl::writeBackupMetadata()
     uncompressed_size = size_of_entries + out->count();
 }
 
-
+/**
+ * 恢复的时候读取元数据信息
+ */
 void BackupImpl::readBackupMetadata()
 {
     using namespace XMLUtils;
@@ -408,7 +416,9 @@ void BackupImpl::readBackupMetadata()
     num_entries = 0;
     size_of_entries = 0;
 
+    // 开始解析元数据文件，这个元数据文件是备份的时候写入的
     const auto * contents = config_root->getNodeByPath("contents");
+    // 遍历这个XML文件中的所有file，这里的file会有增量会有全量
     for (const Poco::XML::Node * child = contents->firstChild(); child; child = child->nextSibling())
     {
         if (child->nodeName() == "file")
@@ -421,12 +431,12 @@ void BackupImpl::readBackupMetadata()
             {
                 info.checksum = unhexChecksum(getString(file_config, "checksum"));
 
-                bool use_base = getBool(file_config, "use_base", false);
-                info.base_size = getUInt64(file_config, "base_size", use_base ? info.size : 0);
+                bool use_base = getBool(file_config, "use_base", false); // 是否需要依赖于base，即是否是增量备份
+                info.base_size = getUInt64(file_config, "base_size", use_base ? info.size : 0); // 读取base size的大小
                 if (info.base_size)
-                    use_base = true;
+                    use_base = true; // 如果base size大于0，那么就需要使用base
 
-                if (info.base_size > info.size)
+                if (info.base_size > info.size) // base size居然大于
                 {
                     throw Exception(
                         ErrorCodes::BACKUP_DAMAGED,
@@ -454,21 +464,21 @@ void BackupImpl::readBackupMetadata()
             if (info.size)
                 file_infos.try_emplace(std::pair{info.size, info.checksum}, info);
 
-            ++num_files;
-            total_size += info.size;
+            ++num_files; // 全量备份的文件数量加1
+            total_size += info.size; // total_size就是info.size的累加信息，即增量加上base的部分，即全部的大小
             bool has_entry = !deduplicate_files || (info.size && (info.size != info.base_size) && (info.data_file_name.empty() || (info.data_file_name == info.file_name)));
             if (has_entry)
             {
                 ++num_entries;
-                size_of_entries += info.size - info.base_size;
+                size_of_entries += info.size - info.base_size; // 而size_of_entries是需要用全量info.size 减去base_size的大小的
             }
         }
     }
 
     uncompressed_size = size_of_entries + str.size();
-    compressed_size = uncompressed_size;
+    compressed_size = uncompressed_size; // 默认情况，压缩就是未压缩的大小
     if (!use_archive)
-        setCompressedSize();
+        setCompressedSize(); // 修正compressed_size，不适用archive的时候，其实不会修正
 }
 
 void BackupImpl::checkBackupDoesntExist() const
@@ -917,12 +927,15 @@ void BackupImpl::finalizeWriting()
     writing_finalized = true;
 }
 
-
+/**
+ * 修正compressed_size的大小，在use_archive的情况下，
+ */
 void BackupImpl::setCompressedSize()
 {
+    // 如果使用archive 模式，那么compressed_size大小是实际读取或者写入的archive文件的大小
     if (use_archive)
         compressed_size = writer ? writer->getFileSize(archive_params.archive_name) : reader->getFileSize(archive_params.archive_name);
-    else
+    else // 不适用archive模式，那么二者相等
         compressed_size = uncompressed_size;
 }
 

@@ -191,7 +191,8 @@ bool PipelineExecutor::checkTimeLimit()
 
 void PipelineExecutor::setReadProgressCallback(ReadProgressCallbackPtr callback)
 {
-    read_progress_callback = std::move(callback);
+    // PipelineExecutor::initializeExecution中会初始化所有的ExecutorTask，然后将对应的Callback设置进去
+    read_progress_callback = std::move(callback); // 为当前的PipelineExecutor设置对应的Callback
 }
 
 void PipelineExecutor::finalizeExecution()
@@ -308,7 +309,7 @@ void PipelineExecutor::initializeExecution(size_t num_threads)
 
     Queue queue;
     graph->initializeExecution(queue);
-
+    // 调用了静态方法 ExecutorTasks::init
     tasks.init(num_threads, use_threads, profile_processors, trace_processors, read_progress_callback.get());
     tasks.fill(queue);
 

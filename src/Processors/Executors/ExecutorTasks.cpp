@@ -139,6 +139,15 @@ void ExecutorTasks::pushTasks(Queue & queue, Queue & async_queue, ExecutionThrea
     }
 }
 
+/**
+ * 在 void PipelineExecutor::initializeExecution中调用
+ * 传入了对应的ReadProgressCallback，设置到每一个thread对应的executor_context中去
+ * @param num_threads_
+ * @param use_threads_
+ * @param profile_processors
+ * @param trace_processors
+ * @param callback
+ */
 void ExecutorTasks::init(size_t num_threads_, size_t use_threads_, bool profile_processors, bool trace_processors, ReadProgressCallback * callback)
 {
     num_threads = num_threads_;
@@ -151,6 +160,7 @@ void ExecutorTasks::init(size_t num_threads_, size_t use_threads_, bool profile_
 
         executor_contexts.reserve(num_threads);
         for (size_t i = 0; i < num_threads; ++i)
+            // 为每一个thread创建一个ExecutionThreadContext，传入对应的 ReadProgressCallback
             executor_contexts.emplace_back(std::make_unique<ExecutionThreadContext>(i, profile_processors, trace_processors, callback));
     }
 }

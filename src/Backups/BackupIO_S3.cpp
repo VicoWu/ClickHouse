@@ -132,15 +132,28 @@ std::unique_ptr<SeekableReadBuffer> BackupReaderS3::readFile(const String & file
         client, s3_uri.bucket, fs::path(s3_uri.key) / file_name, s3_uri.version_id, request_settings, read_settings);
 }
 
+/**
+ * 备份文件从 S3 存储复制到目标磁盘，对应了restore的过程
+ * 上层的调用者是 BackupImpl::copyFileToDisk,
+ * @param path_in_backup
+ * @param file_size
+ * @param encrypted_in_backup
+ * @param destination_disk
+ * @param destination_path
+ * @param write_mode
+ */
 void BackupReaderS3::copyFileToDisk(const String & path_in_backup, size_t file_size, bool encrypted_in_backup,
                                     DiskPtr destination_disk, const String & destination_path, WriteMode write_mode)
 {
+
     /// Use the native copy as a more optimal way to copy a file from S3 to S3 if it's possible.
     /// We don't check for `has_throttling` here because the native copy almost doesn't use network.
     auto destination_data_source_description = destination_disk->getDataSourceDescription();
+    // 先获取目标磁盘的数据源描述，确认其与当前 S3 数据源相同(enum class DataSourceType)，并且加密状态一致。
     if (destination_data_source_description.sameKind(data_source_description)
         && (destination_data_source_description.is_encrypted == encrypted_in_backup))
     {
+        // 这里的disk并不一定指的是磁盘，只是ClickHouse的disk配置，可以支持S3
         /// Use native copy, the more optimal way.
         LOG_TRACE(log, "Copying {} from S3 to disk {} using native copy", path_in_backup, destination_disk->getName());
         auto write_blob_function = [&](const Strings & blob_path, WriteMode mode, const std::optional<ObjectAttributes> & object_attributes) -> size_t
@@ -194,6 +207,7 @@ void BackupWriterS3::copyFileFromDisk(const String & path_in_backup, DiskPtr src
     /// Use the native copy as a more optimal way to copy a file from S3 to S3 if it's possible.
     /// We don't check for `has_throttling` here because the native copy almost doesn't use network.
     auto source_data_source_description = src_disk->getDataSourceDescription();
+    // 在进行备份的时候，如果被备份的文件和当前构造BackupWriterS3的data_source_description(即目标位置的)source_data_source_description相同，最重要的是type要相同，
     if (source_data_source_description.sameKind(data_source_description) && (source_data_source_description.is_encrypted == copy_encrypted))
     {
         /// getBlobPath() can return more than 3 elements if the file is stored as multiple objects in S3 bucket.

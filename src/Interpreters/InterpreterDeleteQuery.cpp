@@ -84,6 +84,7 @@ BlockIO InterpreterDeleteQuery::execute()
                             "Lightweight delete mutate is disabled. "
                             "Set `enable_lightweight_delete` setting to enable it");
 
+        // 轻量级delete只会更新它的掩码表
         /// Build "ALTER ... UPDATE _row_exists = 0 WHERE predicate" query
         String alter_query =
             "ALTER TABLE " + table->getStorageID().getFullTableName()

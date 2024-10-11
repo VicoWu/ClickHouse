@@ -685,6 +685,10 @@ void QueryPipeline::convertStructureTo(const ColumnsWithTypeAndName & columns)
     addExpression(extremes, actions, *processors);
 }
 
+/**
+ * 获取一个ReadProgressCallback，这个ReadProgressCallback封装了对应的比如MergeProgressCallback
+ * @return
+ */
 std::unique_ptr<ReadProgressCallback> QueryPipeline::getReadProgressCallback() const
 {
     auto callback = std::make_unique<ReadProgressCallback>();

@@ -4351,6 +4351,7 @@ void MergeTreeData::delayInsertOrThrowIfNeeded(Poco::Event * until, const Contex
     }
 
     auto [parts_count_in_partition, size_of_partition] = getMaxPartsCountAndSizeForPartition();
+    // 计算这个partition的part的平均大小
     size_t average_part_size = parts_count_in_partition ? size_of_partition / parts_count_in_partition : 0;
     const auto active_parts_to_delay_insert
         = query_settings.parts_to_delay_insert ? query_settings.parts_to_delay_insert : settings->parts_to_delay_insert;
@@ -4359,9 +4360,11 @@ void MergeTreeData::delayInsertOrThrowIfNeeded(Poco::Event * until, const Contex
     size_t active_parts_over_threshold = 0;
 
     {
+        // 判断part是否足够大。这里的意思是，如果part数量虽然很多，但是足够大，那么这也属于合理情况(数据的确很多)，没必要延迟或者丢弃数据
+        // max_avg_part_size_for_too_many_parts的值是10G，并且partition中part的平均大小大于了这个10G，那么没必要delay或者throw insert
         bool parts_are_large_enough_in_average
             = settings->max_avg_part_size_for_too_many_parts && average_part_size > settings->max_avg_part_size_for_too_many_parts;
-
+        // part的数量大于需要丢弃数据的阈值，并且part的平均大小并没有很大，那么就抛出异常
         if (parts_count_in_partition >= active_parts_to_throw_insert && !parts_are_large_enough_in_average)
         {
             ProfileEvents::increment(ProfileEvents::RejectedInserts);
@@ -4372,24 +4375,35 @@ void MergeTreeData::delayInsertOrThrowIfNeeded(Poco::Event * until, const Contex
                 ReadableSize(average_part_size),
                 getLogName());
         }
+        // 如果part的数量大于需要延迟插入的阈值，那么就打算进行delay
         if (active_parts_to_delay_insert > 0 && parts_count_in_partition >= active_parts_to_delay_insert
             && !parts_are_large_enough_in_average)
+            // 计算超出的部分
             /// if parts_count == parts_to_delay_insert -> we're 1 part over threshold
             active_parts_over_threshold = parts_count_in_partition - active_parts_to_delay_insert + 1;
     }
 
-    /// no need for delay
+    /// 没有必要delay，直接返回
     if (!active_parts_over_threshold && !outdated_parts_over_threshold)
         return;
-
+    // 开始计算需要delay的时间
     UInt64 delay_milliseconds = 0;
     {
         size_t parts_over_threshold = 0;
         size_t allowed_parts_over_threshold = 1;
+        /**
+         * 超出阈值的分区数量： 延迟时间基于以下两个条件之一：
+
+        活跃分区超出阈值：active_parts_over_threshold
+        过期分区超出阈值：outdated_parts_over_threshold
+        决定使用哪个来计算延迟时间。使用 active_parts_over_threshold 和 outdated_parts_over_threshold 中较大的那个。
+         */
         const bool use_active_parts_threshold = (active_parts_over_threshold >= outdated_parts_over_threshold);
         if (use_active_parts_threshold)
         {
             parts_over_threshold = active_parts_over_threshold;
+            // 计算配置的丢弃和延迟之间的parts的数量差值，比如，active_parts_to_throw_insert配置为300，active_parts_to_delay_insert配置为150，那么
+            // allowed_parts_over_threshold就是150
             allowed_parts_over_threshold = active_parts_to_throw_insert - active_parts_to_delay_insert;
         }
         else
@@ -4407,10 +4421,14 @@ void MergeTreeData::delayInsertOrThrowIfNeeded(Poco::Event * until, const Contex
                 (use_active_parts_threshold ? "active" : "inactive"),
                 allowed_parts_over_threshold,
                 parts_over_threshold);
-
+        // 计算最大的delay的时间,以秒为单位
         const UInt64 max_delay_milliseconds = (settings->max_delay_to_insert > 0 ? settings->max_delay_to_insert * 1000 : 1000);
+        // parts_over_threshold 是代表超出delay阈值的部分，allowed_parts_over_threshold是延迟以后到丢弃以前的差值
+        // 比如，延迟阈值是150，丢弃阈值是300，当前parts的数量是180，那么 parts_over_threshold 就是30，那么， delay_factor 就是30/(300 - 150) = 20%
         double delay_factor = static_cast<double>(parts_over_threshold) / allowed_parts_over_threshold;
+        // 计算最短的delay时间
         const UInt64 min_delay_milliseconds = settings->min_delay_to_insert_ms;
+        //  计算最终的delay时间，是用配置的max_delay_milliseconds乘以延迟系数
         delay_milliseconds = std::max(min_delay_milliseconds, static_cast<UInt64>(max_delay_milliseconds * delay_factor));
     }
 
@@ -5271,7 +5289,7 @@ void MergeTreeData::restorePartsFromBackup(RestorerFromBackup & restorer, const 
 
     fs::path data_path_in_backup_fs = data_path_in_backup;
     size_t num_parts = 0;
-
+    // 为每一个Part创建一个独立的Restore的Task，添加给RestorerFromBackup
     for (const String & part_name : part_names)
     {
         const auto part_info = MergeTreePartInfo::tryParsePartName(part_name, format_version);
@@ -5284,7 +5302,7 @@ void MergeTreeData::restorePartsFromBackup(RestorerFromBackup & restorer, const 
         if (partition_ids && !partition_ids->contains(part_info->partition_id))
             continue;
 
-        restorer.addDataRestoreTask(
+        restorer.addDataRestoreTask( // 添加一个Restore Task
             [storage = std::static_pointer_cast<MergeTreeData>(shared_from_this()),
              backup,
              part_path_in_backup = data_path_in_backup_fs / part_name,
@@ -5308,7 +5326,7 @@ void MergeTreeData::restorePartFromBackup(std::shared_ptr<RestoredPartsHolder> r
     fs::path part_path_in_backup_fs = part_path_in_backup;
     for (const String & filename : filenames)
         total_size_of_part += backup->getFileSize(part_path_in_backup_fs / filename);
-
+    // 这里的disk并不一定指的是磁盘，而是在ClickHouse中配置的<disk>，有可能是S3
     std::shared_ptr<IReservation> reservation = getStoragePolicy()->reserveAndCheck(total_size_of_part);
     auto disk = reservation->getDisk();
 

@@ -53,7 +53,7 @@ public:
         , watch_prev_elapsed(watch_prev_elapsed_)
         , stage(stage_)
     {
-        updateWatch();
+        updateWatch(); // 刚构造的时候，调用一次updateWatch
     }
 
     MergeListElement * merge_list_element_ptr;
@@ -69,13 +69,13 @@ public:
 
     void operator() (const Progress & value)
     {
-        ProfileEvents::increment(ProfileEvents::MergedUncompressedBytes, value.read_bytes);
-        if (stage.is_first)
+        ProfileEvents::increment(ProfileEvents::MergedUncompressedBytes, value.read_bytes); //增加read_bytes的数量
+        if (stage.is_first) // 如果是第一个stage
         {
-            ProfileEvents::increment(ProfileEvents::MergedRows, value.read_rows);
-            ProfileEvents::increment(ProfileEvents::Merge);
+            ProfileEvents::increment(ProfileEvents::MergedRows, value.read_rows); // 增加MergedRows的数量
+            ProfileEvents::increment(ProfileEvents::Merge); // 增加正在进行merge的数量
         }
-        updateWatch();
+        updateWatch(); // 无论是否是第一个stage，增加merge时间的计数
 
         merge_list_element_ptr->bytes_read_uncompressed += value.read_bytes;
         if (stage.is_first)

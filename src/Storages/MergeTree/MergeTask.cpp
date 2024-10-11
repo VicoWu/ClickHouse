@@ -282,7 +282,7 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
 
     switch (global_ctx->chosen_merge_algorithm)
     {
-        case MergeAlgorithm::Horizontal :
+        case MergeAlgorithm:: Horizontal:
         {
             global_ctx->merging_columns = global_ctx->storage_columns;
             global_ctx->merging_column_names = global_ctx->all_column_names;
@@ -838,6 +838,11 @@ bool MergeTask::VerticalMergeStage::executeVerticalMergeForAllColumns() const
 }
 
 
+/**
+ * 调用者是 MergePlainMergeTreeTask::executeStep()
+ * 当前的State，会有不同的Stage，这个execute()方法会被反复执行
+ * @return
+ */
 bool MergeTask::execute()
 {
     assert(stages_iterator != stages.end());
@@ -1021,7 +1026,7 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
     global_ctx->merged_pipeline.setProgressCallback(MergeProgressCallback(global_ctx->merge_list_element_ptr, global_ctx->watch_prev_elapsed, *global_ctx->horizontal_stage_progress));
     /// Is calculated inside MergeProgressCallback.
     global_ctx->merged_pipeline.disableProfileEventUpdate();
-
+    // 构造PullingPipelineExecutor，用来不断触发对Merge的状态的Pull，更新对应的Progress信息。查询 PullingPipelineExecutor::pull
     global_ctx->merging_executor = std::make_unique<PullingPipelineExecutor>(global_ctx->merged_pipeline);
 }
 
@@ -1034,38 +1039,43 @@ MergeAlgorithm MergeTask::ExecuteAndFinalizeHorizontalPart::chooseMergeAlgorithm
 
     if (global_ctx->deduplicate)
         return MergeAlgorithm::Horizontal;
-    if (data_settings->enable_vertical_merge_algorithm == 0)
+    if (data_settings->enable_vertical_merge_algorithm == 0) // 如果没有enable vertical，那么一定是Horizontal
         return MergeAlgorithm::Horizontal;
-    if (ctx->need_remove_expired_values)
+    if (ctx->need_remove_expired_values) // 如果是TTL Merge，那么一定是Horizontal
         return MergeAlgorithm::Horizontal;
     if (global_ctx->future_part->part_format.part_type != MergeTreeDataPartType::Wide)
-        return MergeAlgorithm::Horizontal;
+        return MergeAlgorithm::Horizontal; // 如果是Compact Part，那么一定是Horizontal
     if (global_ctx->future_part->part_format.storage_type != MergeTreeDataPartStorageType::Full)
         return MergeAlgorithm::Horizontal;
 
-    if (!data_settings->allow_vertical_merges_from_compact_to_wide_parts)
+    //默认不允许使用vertical merge将一个part从compact merge到wide，这时候，只有当所有的source parts都是Wide，才有可能进行vertical
+    if (!data_settings->allow_vertical_merges_from_compact_to_wide_parts) // 如果不允许将part从compact merge 到wide，那么，只要有一个不是wide part，就只能使用Horizontal Part。默认是false，不允许
     {
         for (const auto & part : global_ctx->future_part->parts)
         {
-            if (!isWidePart(part))
+            if (!isWidePart(part)) // 只要有一个part不是wide part，那么就使用horizontal merge，因为compact part的多个列在一个文件中，这种情况下，只能用horizontal merge一行一行的读取，而无法使用vertical merge处理
                 return MergeAlgorithm::Horizontal;
         }
     }
 
+    // 只有当merge参数是以下模式，才能使vertical merge
     bool is_supported_storage =
         ctx->merging_params.mode == MergeTreeData::MergingParams::Ordinary ||
         ctx->merging_params.mode == MergeTreeData::MergingParams::Collapsing ||
         ctx->merging_params.mode == MergeTreeData::MergingParams::Replacing ||
         ctx->merging_params.mode == MergeTreeData::MergingParams::VersionedCollapsing;
 
+    // 只有当有足够的列的时候，才进行vertical
     bool enough_ordinary_cols = global_ctx->gathering_columns.size() >= data_settings->vertical_merge_algorithm_min_columns_to_activate;
 
-    bool enough_total_rows = total_rows_count >= data_settings->vertical_merge_algorithm_min_rows_to_activate;
-
+    // 只有当有足够的行的时候，才进行vertical merge，默认 16 * 8192=131072
+    bool enough_total_rows = total_rows_count >= data_settings->vertical_merge_algorithm_min_rows_to_activate; //
+    // 只有当total_size_bytes_uncompressed足够大的时候，才进行vertical merge， 默认是0
     bool enough_total_bytes = total_size_bytes_uncompressed >= data_settings->vertical_merge_algorithm_min_bytes_to_activate;
-
+    // 只有当parts的数量没有超过指定值的时候，才进行vertical，这里的值是127
     bool no_parts_overflow = global_ctx->future_part->parts.size() <= RowSourcePart::MAX_PARTS;
-
+    // 综合以上条件，大致是只有当总行数足够大(大于131072)，并且part的数量足够小(小于128)，才会进行vertical merge
+    // 所以，为什么当MV/Local的数量很小的时候，Vertical占比比较多？
     auto merge_alg = (is_supported_storage && enough_total_rows && enough_total_bytes && enough_ordinary_cols && no_parts_overflow) ?
                         MergeAlgorithm::Vertical : MergeAlgorithm::Horizontal;
 

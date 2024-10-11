@@ -105,7 +105,7 @@ void MergeTreeSink::consume(Chunk chunk)
                 ++chunk_dedup_seqnum;
             }
         }
-
+        // 默认值为1000， 是parts * files的数量
         size_t max_insert_delayed_streams_for_parallel_write = DEFAULT_DELAYED_STREAMS_FOR_PARALLEL_WRITE;
         if (!support_parallel_write || settings.max_insert_delayed_streams_for_parallel_write.changed)
             max_insert_delayed_streams_for_parallel_write = settings.max_insert_delayed_streams_for_parallel_write;
@@ -123,7 +123,7 @@ void MergeTreeSink::consume(Chunk chunk)
             support_parallel_write = false;
             partitions = DelayedPartitions{};
         }
-
+        // streams的数量还没有达到max_insert_delayed_streams_for_parallel_write，决定进行delay
         partitions.emplace_back(MergeTreeSink::DelayedChunk::Partition
         {
             .temp_part = std::move(temp_part),

@@ -47,7 +47,6 @@ using MergeTaskPtr = std::shared_ptr<MergeTask>;
 class MergeTask
 {
 public:
-
     MergeTask(
         FutureMergedMutatedPartPtr future_part_,
         StorageMetadataPtr metadata_snapshot_,

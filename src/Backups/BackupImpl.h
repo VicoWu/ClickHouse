@@ -80,7 +80,7 @@ public:
     size_t copyFileToDisk(const SizeAndChecksum & size_and_checksum, DiskPtr destination_disk, const String & destination_path, WriteMode write_mode) const override;
     void writeFile(const BackupFileInfo & info, BackupEntryPtr entry) override;
     void finalizeWriting() override;
-    bool supportsWritingInMultipleThreads() const override { return !use_archive; }
+    bool supportsWritingInMultipleThreads() const override { return !use_archive; } // 如果us_archive,只能单线程，如果不use_archive，那么就可以多线程
 
 private:
     void open(const ContextPtr & context);

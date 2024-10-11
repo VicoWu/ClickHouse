@@ -1560,7 +1560,7 @@ private:
             );
 
             ctx->mutating_pipeline = QueryPipelineBuilder::getPipeline(std::move(builder));
-            ctx->mutating_pipeline.setProgressCallback(ctx->progress_callback);
+            ctx->mutating_pipeline.setProgressCallback(ctx->progress_callback); // 这是给mutation query构造的progress callback
             /// Is calculated inside MergeProgressCallback.
             ctx->mutating_pipeline.disableProfileEventUpdate();
             ctx->mutating_executor = std::make_unique<PullingPipelineExecutor>(ctx->mutating_pipeline);
@@ -1822,6 +1822,7 @@ bool MutateTask::prepare()
         ctx->materialized_projections = ctx->interpreter->grabMaterializedProjections();
         ctx->mutating_pipeline_builder = ctx->interpreter->execute();
         ctx->updated_header = ctx->interpreter->getUpdatedHeader();
+        // 为这个 MutateTask 创建对应的MergeProgressCallback对象
         ctx->progress_callback = MergeProgressCallback((*ctx->mutate_entry)->ptr(), ctx->watch_prev_elapsed, *ctx->stage_progress);
     }
 
