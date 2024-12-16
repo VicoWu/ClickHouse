@@ -464,7 +464,7 @@ void ReplicatedMergeTreeSinkImpl<async_insert>::consume(Chunk chunk)
 
             block_id = temp_part.part->getZeroLevelPartBlockID(block_dedup_token);
             LOG_DEBUG(log, "Wrote block with ID '{}', {} rows{}", block_id, current_block.block.rows(), quorumLogMessage(replicas_num));
-        }
+
         else
         {
             LOG_DEBUG(log, "Wrote block with {} rows{}", current_block.block.rows(), quorumLogMessage(replicas_num));

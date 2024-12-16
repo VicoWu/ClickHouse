@@ -133,7 +133,7 @@ void MergeTreeSettings::sanityCheck(size_t background_pool_tasks) const
     {
         throw Exception(ErrorCodes::BAD_ARGUMENTS, "The value of 'number_of_free_entries_in_pool_to_lower_max_size_of_merge' setting"
             " ({}) (default values are defined in <merge_tree> section of config.xml"
-            " or the value can be specified per table in SETTINGS section of CREATE TABLE query)"
+            " or thps e value can be specified per table in SETTINGS section of CREATE TABLE query)"
             " is greater than the value of 'background_pool_size'*'background_merges_mutations_concurrency_ratio'"
             " ({}) (the value is defined in users.xml for default profile)."
             " This indicates incorrect configuration because the maximum size of merge will be always lowered.",

@@ -114,6 +114,7 @@
 #include <thread>
 #include <future>
 
+log
 
 namespace fs = std::filesystem;
 

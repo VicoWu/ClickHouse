@@ -387,15 +387,18 @@ void BackupsWorker::doBackup(
             backup_query->setCurrentDatabase(context->getCurrentDatabase());
 
             /// Prepare backup entries.
+            // 创建并准备对应的BackupEntries
             BackupEntries backup_entries;
             {
                 BackupEntriesCollector backup_entries_collector{backup_query->elements, backup_settings, backup_coordination, context};
-                backup_entries = backup_entries_collector.run();
+                backup_entries = backup_entries_collector.run(); // 搜索 BackupEntriesCollector::run()
             }
 
             /// Write the backup entries to the backup.
+            /// 先写入BackupEntries
             buildFileInfosForBackupEntries(backup, backup_entries, backup_coordination);
             //  There will be one backup thread for each backup entry
+            // 然后，会有独立的线程池，针对这些backupentri，进行真正的backup操作
             writeBackupEntries(backup, std::move(backup_entries), backup_id, backup_coordination, backup_settings.internal);
 
             /// We have written our backup entries, we need to tell other hosts (they could be waiting for it).
@@ -748,6 +751,7 @@ void BackupsWorker::doRestore(
 
             /// Execute the data restoring tasks.
             // 用来执行所生成的restore task,每一个task会有restores_thread_pool中的一个独立的thread来执行
+            // 关于restore task的添加，参考 void MergeTreeData::restorePartsFromBackup
             restoreTablesData(restore_id, backup, std::move(data_restore_tasks), *restores_thread_pool);
 
             /// We have restored everything, we need to tell other hosts (they could be waiting for it).

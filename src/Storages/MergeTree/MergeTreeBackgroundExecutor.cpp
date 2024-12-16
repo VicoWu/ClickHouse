@@ -42,6 +42,8 @@ MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     , max_tasks_count(max_tasks_count_) // 16 * 2
     , metric(metric_)  // 0
     , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // active + pending
+    // ThreadPoolImpl<Thread>::ThreadPoolImpl
+    // ThreadPoolImpl<Thread>::ThreadPoolImpl
     , pool(std::make_unique<ThreadPool>(
           CurrentMetrics::MergeTreeBackgroundExecutorThreads, CurrentMetrics::MergeTreeBackgroundExecutorThreadsActive))
 {

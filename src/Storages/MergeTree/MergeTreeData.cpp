@@ -5164,7 +5164,8 @@ BackupEntries MergeTreeData::backupParts(
             table_lock = lockForShare(local_context->getCurrentQueryId(), local_context->getSettingsRef().lock_acquire_timeout);
 
         BackupEntries backup_entries_from_part;
-        part->getDataPartStorage().backup(
+        part->getDataPartStorage().backup( // 根据这个Part文件的对应的Storage信息，添加对应的BackupEntry到backup_entries_from_part中
+            // 搜索 void DataPartStorageOnDiskBase::backup(
             part->checksums,
             part->getFileNamesWithoutChecksums(),
             data_path_in_backup,
@@ -5176,6 +5177,7 @@ BackupEntries MergeTreeData::backupParts(
         auto projection_parts = part->getProjectionParts();
         for (const auto & [projection_name, projection_part] : projection_parts)
         {
+            // 根据这个project Part文件的对应的Storage信息，添加对应的BackupEntry到backup_entries_from_part中
             projection_part->getDataPartStorage().backup(
                 projection_part->checksums,
                 projection_part->getFileNamesWithoutChecksums(),

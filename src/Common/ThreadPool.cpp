@@ -411,6 +411,7 @@ void ThreadPoolImpl<Thread>::worker(typename std::list<Thread>::iterator thread_
         /// Run the job.
         try
         {
+            // 任务结束的时候会减去1
             CurrentMetrics::Increment metric_active_pool_threads(metric_active_threads); // 增加active thread
 
             job();

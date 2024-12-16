@@ -326,6 +326,16 @@ DataPartStorageOnDiskBase::getReplicatedFilesDescriptionForRemoteDisk(const Name
     return description;
 }
 
+/**
+ * 主要是为这个part文件添加对应的BackupEntry，随后的备份系统将会为每一个BackupEntry创建对应的Backup 任务
+ * @param checksums
+ * @param files_without_checksums
+ * @param path_in_backup
+ * @param backup_settings
+ * @param make_temporary_hard_links
+ * @param backup_entries
+ * @param temp_dirs
+ */
 void DataPartStorageOnDiskBase::backup(
     const MergeTreeDataPartChecksums & checksums,
     const NameSet & files_without_checksums,

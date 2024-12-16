@@ -96,7 +96,7 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartsSizeForMerge(size_t max_coun
     /// One entry is probably the entry where this function is executed.
     /// This will protect from bad settings.
     UInt64 max_size = 0;
-    // 如果剩余可调度的task的数量大于number_of_free_entries_in_pool_to_lower_max_size_of_merge(默认为8)，那么，最大的size不设置限制
+    // 如果剩余可调度的task的数量(free slot)大于number_of_free_entries_in_pool_to_lower_max_size_of_merge(默认为8)，那么，最大的size不设置限制
     if (scheduled_tasks_count <= 1 || free_entries >= data_settings->number_of_free_entries_in_pool_to_lower_max_size_of_merge)
         max_size = data_settings->max_bytes_to_merge_at_max_space_in_pool;
     else
@@ -118,6 +118,7 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
 
     if (data_settings->max_number_of_mutations_for_replica > 0 &&
         occupied >= data_settings->max_number_of_mutations_for_replica)
+        LOG_INFO()
         return 0;
 
     /// DataPart can be store only at one disk. Get maximum reservable free space at all disks.
