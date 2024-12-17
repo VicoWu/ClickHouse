@@ -3195,6 +3195,7 @@ bool StorageReplicatedMergeTree::processQueueEntry(ReplicatedMergeTreeQueue::Sel
 
 bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assignee)
 {
+    LOG_INFO(log, "scheduleDataProcessingJob started.")
     /// If replication queue is stopped exit immediately as we successfully executed the task
     if (queue.actions_blocker.isCancelled())
         return false;
@@ -3225,6 +3226,7 @@ bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssigne
     }
     else if (job_type == LogEntry::MUTATE_PART)
     {
+        LOG_INFO(log, "start to schedule LogEntry::MUTATE_PART")
         auto task = std::make_shared<MutateFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
         assignee.scheduleMergeMutateTask(task);
         return true;
@@ -3276,6 +3278,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
 {
     if (!is_leader)
         return;
+    LOG_INFO(log, "running mergeSelectingTask");
 
     const auto storage_settings_ptr = getSettings();
     const bool deduplicate = false; /// TODO: read deduplicate option from table config
@@ -3301,14 +3304,14 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
         size_t merges_and_mutations_sum = merges_and_mutations_queued.merges + merges_and_mutations_queued.mutations;
         if (!canEnqueueBackgroundTask())
         {
-            LOG_TRACE(log, "Reached memory limit for the background tasks ({}), so won't select new parts to merge or mutate."
+            LOG_INFO(log, "Reached memory limit for the background tasks ({}), so won't select new parts to merge or mutate."
                 "Current background tasks memory usage: {}.",
                 formatReadableSizeWithBinarySuffix(background_memory_tracker.getSoftLimit()),
                 formatReadableSizeWithBinarySuffix(background_memory_tracker.get()));
         }
         else if (merges_and_mutations_sum >= storage_settings_ptr->max_replicated_merges_in_queue)
         {
-            LOG_TRACE(log, "Number of queued merges ({}) and part mutations ({})"
+            LOG_INFO(log, "Number of queued merges ({}) and part mutations ({})"
                 " is greater than max_replicated_merges_in_queue ({}), so won't select new parts to merge or mutate.",
                 merges_and_mutations_queued.merges,
                 merges_and_mutations_queued.mutations,
@@ -3340,11 +3343,21 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                 else
                     merge_pred.emplace(queue.getMergePredicate(zookeeper, partitions_to_merge_in));
             }
+            LOG_INFO(
+                log,
+                "can_assign_merge is {}. max_source_part_size_for_mutation is {}, queue.countMutations() is {}, "
+                "merges_and_mutations_queued.mutations is {}, max_replicated_mutations_in_queue is {}",
+                can_assign_merge,
+                max_source_part_size_for_mutation,
+                queue.countMutations(),
+                merges_and_mutations_queued.mutations,
+                storage_settings_ptr->max_replicated_mutations_in_queue);
 
             if (can_assign_merge &&
                 merger_mutator.selectPartsToMerge(future_merged_part, false, max_source_parts_size_for_merge, *merge_pred,
                                                   merge_with_ttl_allowed, NO_TRANSACTION_PTR, nullptr, &partitions_to_merge_in) == SelectPartsDecision::SELECTED)
             {
+                LOG_INFO(log, "Will assign merge instead of mutation. ");
                 create_result = createLogEntryToMergeParts(
                     zookeeper,
                     future_merged_part->parts,
@@ -3370,12 +3383,19 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                 DataPartsVector data_parts = getDataPartsVectorForInternalUsage();
                 for (const auto & part : data_parts)
                 {
-                    if (part->getBytesOnDisk() > max_source_part_size_for_mutation)
+                    if (part->getBytesOnDisk() > max_source_part_size_for_mutation){
+                        LOG_INFO(log, "bytes on disk {} is larger than max_source_part_size_for_mutation {}",
+                                 part->getBytesOnDisk(), max_source_part_size_for_mutation);
                         continue;
+                    }
+
 
                     std::optional<std::pair<Int64, int>> desired_mutation_version = merge_pred->getDesiredMutationVersion(part);
-                    if (!desired_mutation_version)
+                    if (!desired_mutation_version){
+                        LOG_INFO(log, "NOT desired_mutation_version");
                         continue;
+                    }
+
 
                     create_result = createLogEntryToMutatePart(
                         *part,
@@ -3383,7 +3403,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                         desired_mutation_version->first,
                         desired_mutation_version->second,
                         merge_pred->getVersion());
-
+                    LOG_INFO(info, "Create log entry for mutate result is {}", create_result);
                     if (create_result == CreateMergeEntryResult::Ok ||
                         create_result == CreateMergeEntryResult::LogUpdated)
                         break;
@@ -3402,10 +3422,14 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
     if (create_result != CreateMergeEntryResult::Ok
         && create_result != CreateMergeEntryResult::LogUpdated)
     {
+        LOG_INFO(log, "Will schedule after {} because result is {}", storage_settings_ptr->merge_selecting_sleep_ms,
+                 create_result);
         merge_selecting_task->scheduleAfter(storage_settings_ptr->merge_selecting_sleep_ms);
     }
     else
     {
+        LOG_INFO(log, "Will schedule quickly {} because result is {}", storage_settings_ptr->merge_selecting_sleep_ms,
+                 create_result);
         merge_selecting_task->schedule();
     }
 }
@@ -3547,6 +3571,7 @@ StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::c
                 " Won't mutate that part and will check it.", part.name, (time(nullptr) - part.modification_time));
             enqueuePartForCheck(part.name);
         }
+        LOG_INFO(log, "missing part");
 
         return CreateMergeEntryResult::MissingPart;
     }
@@ -3580,7 +3605,7 @@ StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::c
     if (code == Coordination::Error::ZBADVERSION)
     {
         ProfileEvents::increment(ProfileEvents::NotCreatedLogEntryForMutation);
-        LOG_TRACE(log, "Log entry is not created for mutation {} because log was updated", new_part_name);
+        LOG_INFO(log, "Log entry is not created for mutation {} because log was updated", new_part_name);
         return CreateMergeEntryResult::LogUpdated;
     }
 
