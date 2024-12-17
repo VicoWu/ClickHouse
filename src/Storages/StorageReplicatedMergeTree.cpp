@@ -3195,7 +3195,7 @@ bool StorageReplicatedMergeTree::processQueueEntry(ReplicatedMergeTreeQueue::Sel
 
 bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assignee)
 {
-    LOG_INFO(log, "scheduleDataProcessingJob started.")
+    LOG_INFO(log, "scheduleDataProcessingJob started.");
     /// If replication queue is stopped exit immediately as we successfully executed the task
     if (queue.actions_blocker.isCancelled())
         return false;
@@ -3226,7 +3226,7 @@ bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssigne
     }
     else if (job_type == LogEntry::MUTATE_PART)
     {
-        LOG_INFO(log, "start to schedule LogEntry::MUTATE_PART")
+        LOG_INFO(log, "start to schedule LogEntry::MUTATE_PART");
         auto task = std::make_shared<MutateFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
         assignee.scheduleMergeMutateTask(task);
         return true;
@@ -3403,7 +3403,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                         desired_mutation_version->first,
                         desired_mutation_version->second,
                         merge_pred->getVersion());
-                    LOG_INFO(info, "Create log entry for mutate result is {}", create_result);
+                    LOG_INFO(log, "Create log entry for mutate result is {}", create_result);
                     if (create_result == CreateMergeEntryResult::Ok ||
                         create_result == CreateMergeEntryResult::LogUpdated)
                         break;
