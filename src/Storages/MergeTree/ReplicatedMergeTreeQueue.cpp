@@ -1555,7 +1555,7 @@ ReplicatedMergeTreeQueue::CurrentlyExecuting::CurrentlyExecuting(
         [[maybe_unused]] bool inserted = queue.currently_executing_drop_replace_ranges.emplace(drop_range_info).second;
         assert(inserted);
     }
-    entry->currently_executing = true;
+    entry->currently_executing = true; // 当前正在执行
     ++entry->num_tries;
     entry->last_attempt_time = time(nullptr);
 
@@ -1635,7 +1635,12 @@ ReplicatedMergeTreeQueue::CurrentlyExecuting::~CurrentlyExecuting()
     }
 }
 
-
+/**
+ * 从queue中获取entry来执行，注意，是获取元素，而不是删除元素
+ * @param merger_mutator
+ * @param data
+ * @return
+ */
 ReplicatedMergeTreeQueue::SelectedEntryPtr ReplicatedMergeTreeQueue::selectEntryToProcess(MergeTreeDataMergerMutator & merger_mutator, MergeTreeData & data)
 {
     LogEntryPtr entry;
@@ -1644,11 +1649,13 @@ ReplicatedMergeTreeQueue::SelectedEntryPtr ReplicatedMergeTreeQueue::selectEntry
 
     for (auto it = queue.begin(); it != queue.end(); ++it)
     {
-        if ((*it)->currently_executing)
+        if ((*it)->currently_executing) // 当前正在执行，不考虑
             continue;
 
         if (shouldExecuteLogEntry(**it, (*it)->postpone_reason, merger_mutator, data, lock))
         {
+            // 将迭代器 it 所指向的元素从当前的位置移动到 queue 的末尾,
+            // 注意，这不是删除操作，而是改变了该元素在队列中的顺序。
             entry = *it;
             /// We gave a chance for the entry, move it to the tail of the queue, after that
             /// we move it to the end of the queue.

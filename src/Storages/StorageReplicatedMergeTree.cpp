@@ -3220,15 +3220,16 @@ bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssigne
     }
     else if (job_type == LogEntry::MERGE_PARTS)
     {
+        LOG_INFO(log, "MY_DEBUG start to schedule LogEntry::MERGE_PARTS.");
         auto task = std::make_shared<MergeFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
-        assignee.scheduleMergeMutateTask(task);
+        assignee.scheduleMergeMutateTask(task); // 将会调用trySchedule
         return true;
     }
     else if (job_type == LogEntry::MUTATE_PART)
     {
-        LOG_INFO(log, "start to schedule LogEntry::MUTATE_PART");
+        LOG_INFO(log, "MY_DEBUG start to schedule LogEntry::MUTATE_PART"); // 这里已经在2024.12.18 07:22:18连续调用了13次
         auto task = std::make_shared<MutateFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
-        assignee.scheduleMergeMutateTask(task);
+        assignee.scheduleMergeMutateTask(task); //  将会调用trySchedule
         return true;
     }
     else
@@ -3357,7 +3358,7 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                 merger_mutator.selectPartsToMerge(future_merged_part, false, max_source_parts_size_for_merge, *merge_pred,
                                                   merge_with_ttl_allowed, NO_TRANSACTION_PTR, nullptr, &partitions_to_merge_in) == SelectPartsDecision::SELECTED)
             {
-                LOG_INFO(log, "Will assign merge instead of mutation. ");
+                LOG_INFO(log, "MY_DEBUG Will assign merge instead of mutation. ");
                 create_result = createLogEntryToMergeParts(
                     zookeeper,
                     future_merged_part->parts,
@@ -3403,7 +3404,8 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                         desired_mutation_version->first,
                         desired_mutation_version->second,
                         merge_pred->getVersion());
-                    LOG_INFO(log, "Create log entry for mutate result is {}", create_result);
+                    LOG_INFO(log, "MY_DEBUG Create log entry for mutate result is {}."
+                                  "max_replicated_mutations_in_queue is not a problem ", create_result);
                     if (create_result == CreateMergeEntryResult::Ok ||
                         create_result == CreateMergeEntryResult::LogUpdated)
                         break;
@@ -3612,7 +3614,7 @@ StorageReplicatedMergeTree::CreateMergeEntryResult StorageReplicatedMergeTree::c
     zkutil::KeeperMultiException::check(code, ops, responses);
 
     ProfileEvents::increment(ProfileEvents::CreatedLogEntryForMutation);
-    LOG_TRACE(log, "Created log entry for mutation {}", new_part_name);
+    LOG_TRACE(log, "MY_DEBUG Created log entry for mutation {}", new_part_name);
     return CreateMergeEntryResult::Ok;
 }
 

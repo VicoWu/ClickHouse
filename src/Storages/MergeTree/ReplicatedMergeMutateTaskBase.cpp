@@ -150,6 +150,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
 
     auto execute_fetch = [&] (bool need_to_check_missing_part) -> bool
     {
+        // 执行成功了才会将这个task从queue中删除
         if (storage.executeFetch(entry, need_to_check_missing_part))
             return remove_processed_entry();
 
@@ -203,6 +204,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
             try
             {
                 if (!finalize(part_log_writer))
+                    // 删除entry
                     return execute_fetch(/* need_to_check_missing = */true);
             }
             catch (...)

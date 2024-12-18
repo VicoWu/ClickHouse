@@ -24,7 +24,6 @@ void BackgroundJobsAssignee::trigger()
 
     if (!holder)
         return;
-
     /// Do not reset backoff factor if some task has appeared,
     /// but decrease it exponentially on every new task.
     no_work_done_count /= 2;
@@ -51,9 +50,9 @@ void BackgroundJobsAssignee::postpone()
     holder->scheduleAfter(next_time_to_execute, false);
 }
 
-
 bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
 {
+    // 可以看到，这个方法就已经没有被调用了
     bool res = getContext()->getMergeMutateExecutor()->trySchedule(merge_task);
     res ? trigger() : postpone();
     return res;

@@ -56,7 +56,10 @@ MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
         pool->scheduleOrThrowOnError([this] { threadFunction(); });
 
     if (!policy.empty())
+    {
+        LOG_INFO(log, "MY_DEBUG policy is not null. setup policy for pending..");
         pending.updatePolicy(policy);
+    }
 }
 
 template <class Queue>
@@ -85,17 +88,18 @@ void MergeTreeBackgroundExecutor<Queue>::increaseThreadsAndMaxTasksCount(size_t 
     /// Do not throw any exceptions from global pool. Just log a warning and silently return.
     if (new_threads_count < threads_count)
     {
-        LOG_WARNING(log, "Loaded new threads count for {}Executor from top level config, but new value ({}) is not greater than current {}", name, new_threads_count, threads_count);
+        LOG_WARNING(log, "MY_DEBUG Loaded new threads count for {}Executor from top level config, but new value ({}) is not greater than current {}", name, new_threads_count, threads_count);
         return;
     }
 
     if (new_max_tasks_count < max_tasks_count.load(std::memory_order_relaxed))
     {
-        LOG_WARNING(log, "Loaded new max tasks count for {}Executor from top level config, but new value ({}) is not greater than current {}", name, new_max_tasks_count, max_tasks_count);
+        LOG_WARNING(log, "MY_DEBUG Loaded new max tasks count for {}Executor from top level config, but new value ({}) is not greater than current {}", name, new_max_tasks_count, max_tasks_count);
         return;
     }
 
-    LOG_INFO(log, "Loaded new threads count ({}) and max tasks count ({}) for {}Executor", new_threads_count, new_max_tasks_count, name);
+    LOG_INFO(log, "MY_DEBUG Loaded new threads count ({}) and max tasks count "
+                  "({}) for {} Executor", new_threads_count, new_max_tasks_count, name);
 
     pending.setCapacity(new_max_tasks_count);
     active.set_capacity(new_max_tasks_count);
@@ -122,7 +126,9 @@ template <class Queue>
 bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
 {
     std::lock_guard lock(mutex);
-
+    LOG_INFO(log,"trySchedule but current task count is larger than max_tasks_count {}, "
+                  "threads count {}, pool max threads {}, name {}",
+                    max_tasks_count, threads_count, pool->getMaxThreads(), name);
     if (shutdown){
         LOG_INFO(log, "MergeTreeBackgroundExecutor ALREADY shutdown. Will not trigger. name {}", name);
         return false;
@@ -136,11 +142,13 @@ bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
                  value.load(), max_tasks_count, threads_count, pool->getMaxThreads(), name);
         return false;
     }
-    LOG_INFO(log, "Scheduled task successfully. Current task count {}, max_tasks_count is {}. "
+    LOG_INFO(log, "MY_DEBUG Scheduled task successfully. Current task count {}, max_tasks_count is {}. "
                   "threads count {}, max threads {}, name {}",
              value.load(), max_tasks_count, threads_count, pool->getMaxThreads(), name);
+    // 构造一个TaskRuntimeData的struct，metric加1，然后添加到pending中
     pending.push(std::make_shared<TaskRuntimeData>(std::move(task), metric));
-
+    LOG_INFO(log, "MY_DEBUG After pushed to pending, current task count is {}, name {}",
+             value.load(), name);
     has_tasks.notify_one();
     return true;
 }
@@ -149,6 +157,7 @@ bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
 template <class Queue>
 void MergeTreeBackgroundExecutor<Queue>::removeTasksCorrespondingToStorage(StorageID id)
 {
+    LOG_INFO(log, "Running removeTasksCorrespondingToStorage");
     std::vector<TaskRuntimeDataPtr> tasks_to_wait;
     {
         std::lock_guard lock(mutex);
@@ -176,6 +185,7 @@ void MergeTreeBackgroundExecutor<Queue>::removeTasksCorrespondingToStorage(Stora
 template <class Queue>
 void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
 {
+    LOG_INFO(log, "MY_DEBUG Executing the routing of MergeTreeBackgroundExecutor");
     /// FIXME Review exception-safety of this, remove NOEXCEPT_SCOPE and ALLOW_ALLOCATIONS_IN_SCOPE if possible
     DENY_ALLOCATIONS_IN_SCOPE;
 
@@ -183,6 +193,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
 
     auto erase_from_active = [this, &item]() TSA_REQUIRES(mutex)
     {
+        // 将item从active中移除
         active.erase(std::remove(active.begin(), active.end(), item), active.end());
     };
 
@@ -191,7 +202,9 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     try
     {
         ALLOW_ALLOCATIONS_IN_SCOPE;
-        need_execute_again = item->task->executeStep();
+        need_execute_again = item->task->executeStep(); // 执行item
+        LOG_INFO(log, "MY_DEBUG task->executeStep() is done. ");
+
     }
     catch (const Exception & e)
     {
@@ -211,6 +224,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
         });
     }
 
+    LOG_INFO(log, "MY_DEBUG task->executeStep() is done.  need_execute_again is {}", need_execute_again);
     if (need_execute_again)
     {
         std::lock_guard guard(mutex);
@@ -232,6 +246,7 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
         /// Otherwise the destruction of the task won't be ordered with the destruction of the
         /// storage.
         pending.push(std::move(item));
+        LOG_INFO(log, "MY_DEBUG pushed again to pending and notified other tasks.");
         has_tasks.notify_one();
         item = nullptr;
         return;
@@ -241,7 +256,8 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
         std::lock_guard guard(mutex);
         erase_from_active();
         has_tasks.notify_one();
-
+        LOG_INFO(log, "MY_DEBUG Will not execute again. Erased from active. "
+                      "Current active size {}", active.size());
         try
         {
             ALLOW_ALLOCATIONS_IN_SCOPE;
@@ -301,16 +317,24 @@ void MergeTreeBackgroundExecutor<Queue>::threadFunction()
             TaskRuntimeDataPtr item;
             {
                 std::unique_lock lock(mutex);
+                // 只要有task进来，那么立刻收到通知
                 has_tasks.wait(lock, [this]() TSA_REQUIRES(mutex) { return !pending.empty() || shutdown; });
 
                 if (shutdown)
                     break;
-
+                LOG_INFO(log, "MY_DEBUG "
+                              "Pop up a Task from the pending queue and put it to active. "
+                              "current active size {}", active.size());
                 item = std::move(pending.pop());
                 active.push_back(item);
             }
-
+            LOG_INFO(log, "MY_DEBUG "
+                          "After pushed to active, "
+                          "current active size {}", active.size());
             routine(std::move(item));
+            LOG_INFO(log, "MY_DEBUG "
+                          "After routine, "
+                          "current active size {}", active.size());
         }
         catch (...)
         {
