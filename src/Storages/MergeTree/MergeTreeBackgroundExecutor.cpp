@@ -142,7 +142,7 @@ bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
     pending.push(std::make_shared<TaskRuntimeData>(std::move(task), metric));
 
     has_tasks.notify_one();
-    return true;n
+    return true;
 }
 
 
