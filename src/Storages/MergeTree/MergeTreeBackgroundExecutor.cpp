@@ -124,7 +124,7 @@ bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
     std::lock_guard lock(mutex);
 
     if (shutdown){
-        LOG_INFO(log, "MergeTreeBackgroundExecutor ALREADY shutdown. Will not trigger.");
+        LOG_INFO(log, "MergeTreeBackgroundExecutor ALREADY shutdown. Will not trigger. name {}", name);
         return false;
     }
 
@@ -132,16 +132,17 @@ bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
     auto & value = CurrentMetrics::values[metric];
     if (value.load() >= static_cast<int64_t>(max_tasks_count)){
         LOG_INFO(log, "trySchedule but current task count {} is larger than max_tasks_count {}, "
-                      "threads count {}, pool max threads {}",
-                 value.load(), max_tasks_count, threads_count, pool->getMaxThreads());
+                      "threads count {}, pool max threads {}, name {}",
+                 value.load(), max_tasks_count, threads_count, pool->getMaxThreads(), name);
         return false;
     }
-    LOG_INFO(log, "Scheduled task successfully. Current task count {}, max_tasks_count is {}. threads count {}, max threads {}",
-             value.load(), max_tasks_count, threads_count, pool->getMaxThreads());
+    LOG_INFO(log, "Scheduled task successfully. Current task count {}, max_tasks_count is {}. "
+                  "threads count {}, max threads {}, name {}",
+             value.load(), max_tasks_count, threads_count, pool->getMaxThreads(), name);
     pending.push(std::make_shared<TaskRuntimeData>(std::move(task), metric));
 
     has_tasks.notify_one();
-    return true;
+    return true;n
 }
 
 
