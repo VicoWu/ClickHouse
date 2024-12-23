@@ -64,18 +64,25 @@ bool BackupWriterDefault::fileContentsEqual(const String & file_name, const Stri
 }
 
 /**
-* 调用者是 void BackupWriterDefault::copyFileFromDisk
+
 BackupImpl::writeFile
 ->
 BackupWriterS3::copyFileFromDisk | BackupWriterDisk::copyFileFromDisk
 ->
-void BackupWriterS3::copyFileFromDisk
+// BackupWriterS3 和 BackupWriterDisk 都重写了copyFileFromDisk
+void BackupWriterS3::copyFileFromDisk || void BackupWriterDisk::copyFileFromDisk
 ->
+BackupWriterS3::copyDataToFile(path_in_backup, create_read_buffer, start_pos, length); (只有BackupWriterS3重写了该方法，而BackupWriterDisk没有重写该方法)
+或者
 BackupWriterDefault::copyDataToFile(path_in_backup, create_read_buffer, start_pos, length);
 ->
 BackupWriterDisk::readFile | BackupWriterS3::readFile
 ->
 std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase
+这个是从磁盘备份到磁盘的调用逻辑
+调用者是 void BackupWriterDisk::copyFileFromDisk
+
+对应 BackupWriterS3::copyDataToFile的调用者是void BackupWriterDisk::copyFileFromDisk
 */
 void BackupWriterDefault::copyDataToFile(const String & path_in_backup, const CreateReadBufferFunction & create_read_buffer, UInt64 start_pos, UInt64 length)
 {
@@ -92,17 +99,22 @@ void BackupWriterDefault::copyDataToFile(const String & path_in_backup, const Cr
 }
 
 /**
+
 BackupImpl::writeFile
 ->
 BackupWriterS3::copyFileFromDisk | BackupWriterDisk::copyFileFromDisk
 ->
-void BackupWriterS3::copyFileFromDisk
+// BackupWriterS3 和 BackupWriterDisk 都重写了copyFileFromDisk
+void BackupWriterS3::copyFileFromDisk || void BackupWriterDisk::copyFileFromDisk
 ->
+BackupWriterS3::copyDataToFile(path_in_backup, create_read_buffer, start_pos, length); (只有BackupWriterS3重写了该方法，而BackupWriterDisk没有重写该方法)
+或者
 BackupWriterDefault::copyDataToFile(path_in_backup, create_read_buffer, start_pos, length);
 ->
 BackupWriterDisk::readFile | BackupWriterS3::readFile
 ->
 std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase
+
 
 */
 void BackupWriterDefault::copyFileFromDisk(const String & path_in_backup, DiskPtr src_disk, const String & src_path,
@@ -121,7 +133,7 @@ void BackupWriterDefault::copyFileFromDisk(const String & path_in_backup, DiskPt
             return src_disk->readFile(src_path, settings);
     };
 
-    // BackupWriterDefault::copyDataToFile
+    // void BackupWriterS3::copyDataToFile 或 void BackupWriterDisk::copyDataToFile
     copyDataToFile(path_in_backup, create_read_buffer, start_pos, length);
 }
 }
