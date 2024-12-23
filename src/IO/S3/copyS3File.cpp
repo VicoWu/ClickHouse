@@ -317,7 +317,7 @@ namespace
         void uploadPart(size_t part_number, size_t part_offset, size_t part_size)
         {
             LOG_TRACE(log, "Writing part. Bucket: {}, Key: {}, Upload_id: {}, Size: {}", dest_bucket, dest_key, multipart_upload_id, part_size);
-            LOG_INFO(log, "mydebug is scheduled {}", schedule)
+            LOG_INFO(log, "mydebug is scheduled {}", schedule);
             if (!part_size)
             {
                 LOG_TRACE(log, "Skipping writing an empty part.");
