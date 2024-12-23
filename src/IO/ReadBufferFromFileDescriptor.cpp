@@ -50,6 +50,7 @@ std::string ReadBufferFromFileDescriptor::getFileName() const
 }
 
 /**
+* 类 ReadBufferFromFileDescriptor的构造是在 std::make_unique<ReadBufferFromFile> 构造的时候
 * 调用者是
 * std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase
 */

@@ -32,7 +32,7 @@ ReadBufferFromFile::ReadBufferFromFile(
     size_t alignment,
     std::optional<size_t> file_size_,
     ThrottlerPtr throttler_)
-    : ReadBufferFromFileDescriptor(-1, buf_size, existing_memory, alignment, file_size_, throttler_)
+    : ReadBufferFromFileDescriptor(-1, buf_size, existing_memory, alignment, file_size_, throttler_) // 构造ReadBufferFromFileDescriptor对象，包含了throttle
     , file_name(file_name_)
 {
     ProfileEvents::increment(ProfileEvents::FileOpen);

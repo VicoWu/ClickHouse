@@ -317,7 +317,7 @@ namespace
         void uploadPart(size_t part_number, size_t part_offset, size_t part_size)
         {
             LOG_TRACE(log, "Writing part. Bucket: {}, Key: {}, Upload_id: {}, Size: {}", dest_bucket, dest_key, multipart_upload_id, part_size);
-
+            LOG_INFO(log, "mydebug is scheduled {}", schedule)
             if (!part_size)
             {
                 LOG_TRACE(log, "Skipping writing an empty part.");
@@ -349,6 +349,7 @@ namespace
 
                 try
                 {
+                    // CopyDataToFileHelper::fillUploadPartRequest
                     task->req = fillUploadPartRequest(part_number, part_offset, part_size);
 
                     schedule([this, task, task_finish_notify]()
@@ -373,6 +374,7 @@ namespace
             else
             {
                 UploadPartTask task;
+                // CopyDataToFileHelper::fillUploadPartRequest
                 task.req = fillUploadPartRequest(part_number, part_offset, part_size);
                 processUploadTask(task);
                 part_tags.push_back(task.tag);
@@ -558,6 +560,7 @@ namespace
 
         void performMultipartUpload() { UploadHelper::performMultipartUpload(offset, size); }
 
+        // CopyDataToFileHelper::fillUploadPartRequest
         std::unique_ptr<Aws::AmazonWebServiceRequest> fillUploadPartRequest(size_t part_number, size_t part_offset, size_t part_size) override
         {
             auto read_buffer = std::make_unique<LimitSeekableReadBuffer>(create_read_buffer(), part_offset, part_size);
