@@ -100,7 +100,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
         }
         else if (settings.local_fs_method == LocalFSReadMethod::pread || settings.local_fs_method == LocalFSReadMethod::mmap)
         {
-            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer ReadBufferFromFilePReadWithDescriptorsCache from file {} with local throttle", filename, );
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer ReadBufferFromFilePReadWithDescriptorsCache from file {} with local throttle", filename);
             res = std::make_unique<ReadBufferFromFilePReadWithDescriptorsCache>(
                 filename,
                 buffer_size,
