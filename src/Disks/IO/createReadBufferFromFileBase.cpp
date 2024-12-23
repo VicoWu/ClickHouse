@@ -9,6 +9,7 @@
 #include <IO/SynchronousReader.h>
 #include <IO/AsynchronousReader.h>
 #include <Common/ProfileEvents.h>
+#include <Common/logger_useful.h>
 #include "config.h"
 
 namespace ProfileEvents
@@ -42,6 +43,9 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
     char * existing_memory,
     size_t alignment)
 {
+    LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "Creating read buffer from file {}, size {}, local_fs_method = {}",
+             filename, file_size,
+             settings.local_fs_method);
     if (file_size.has_value() && !*file_size)
         return std::make_unique<ReadBufferFromEmptyFile>();
 
@@ -59,12 +63,15 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
     {
         try
         {
+
             std::unique_ptr<MMapReadBufferFromFileWithCache> res;
             if (file_size)
+                {
                 res = std::make_unique<MMapReadBufferFromFileWithCache>(*settings.mmap_cache, filename, 0, *file_size);
-            else
+                }
+            else {
                 res = std::make_unique<MMapReadBufferFromFileWithCache>(*settings.mmap_cache, filename, 0);
-
+            }
             ProfileEvents::increment(ProfileEvents::CreatedReadBufferMMap);
             return res;
         }
@@ -81,6 +88,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
 
         if (settings.local_fs_method == LocalFSReadMethod::read)
         {
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "Creating read buffer ReadBufferFromFile from file {}, size {} with local throttle", filename, file_size);
             res = std::make_unique<ReadBufferFromFile>(
                 filename,
                 buffer_size,
@@ -92,6 +100,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
         }
         else if (settings.local_fs_method == LocalFSReadMethod::pread || settings.local_fs_method == LocalFSReadMethod::mmap)
         {
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "Creating read buffer ReadBufferFromFilePReadWithDescriptorsCache from file {}, size {} with local throttle", filename, file_size);
             res = std::make_unique<ReadBufferFromFilePReadWithDescriptorsCache>(
                 filename,
                 buffer_size,
@@ -107,6 +116,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
             static std::shared_ptr<IOUringReader> reader = std::make_shared<IOUringReader>(512);
             if (!reader->isSupported())
                 throw Exception(ErrorCodes::UNSUPPORTED_METHOD, "io_uring is not supported by this system");
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "Creating read buffer AsynchronousReadBufferFromFileWithDescriptorsCache from file {}, size {} with local throttle", filename, file_size);
 
             res = std::make_unique<AsynchronousReadBufferFromFileWithDescriptorsCache>(
                 *reader,
@@ -138,6 +148,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
         }
         else if (settings.local_fs_method == LocalFSReadMethod::pread_threadpool)
         {
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "Creating read buffer AsynchronousReadBufferFromFileWithDescriptorsCache from file {}, size {} with local throttle", filename, file_size);
             auto & reader = getThreadPoolReader(FilesystemReaderType::ASYNCHRONOUS_LOCAL_FS_READER);
             res = std::make_unique<AsynchronousReadBufferFromFileWithDescriptorsCache>(
                 reader,
@@ -207,6 +218,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
         }
     }
 #endif
+    LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "Creating Ordinary ReadBufferFromFile from file {}", filename);
 
     ProfileEvents::increment(ProfileEvents::CreatedReadBufferOrdinary);
 

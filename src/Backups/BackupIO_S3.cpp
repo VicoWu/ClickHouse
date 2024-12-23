@@ -188,10 +188,6 @@ BackupWriterS3::BackupWriterS3(
     request_settings.max_single_read_retries = context_->getSettingsRef().s3_max_single_read_retries; // FIXME: Avoid taking value for endpoint
 }
 
-/**
-* 从磁盘拷贝文件到s3
-* 调用者是 BackupImpl::writeFile
-*/
 void BackupWriterS3::copyFileFromDisk(const String & path_in_backup, DiskPtr src_disk, const String & src_path,
                                       bool copy_encrypted, UInt64 start_pos, UInt64 length)
 {
@@ -226,7 +222,7 @@ void BackupWriterS3::copyFileFromDisk(const String & path_in_backup, DiskPtr src
     BackupWriterDefault::copyFileFromDisk(path_in_backup, src_disk, src_path, copy_encrypted, start_pos, length);
 }
 
-// 调用者是 void BackupWriterS3::copyFileFromDisk
+// 调用者是 BackupWriterDefault::copyFileFromDisk
 void BackupWriterS3::copyDataToFile(const String & path_in_backup, const CreateReadBufferFunction & create_read_buffer, UInt64 start_pos, UInt64 length)
 {
     // void copyDataToS3File(

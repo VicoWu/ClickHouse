@@ -825,6 +825,9 @@ size_t BackupImpl::copyFileToDisk(const SizeAndChecksum & size_and_checksum,
 }
 
 
+/**
+* 调用者是 void BackupsWorker::writeBackupEntries
+*/
 void BackupImpl::writeFile(const BackupFileInfo & info, BackupEntryPtr entry)
 {
     if (open_mode != OpenMode::WRITE)
@@ -879,6 +882,7 @@ void BackupImpl::writeFile(const BackupFileInfo & info, BackupEntryPtr entry)
         LOG_TRACE(log, "Writing backup for file {} from {} (disk {}): data file #{}", info.data_file_name, src_file_desc, src_disk->getName(), info.data_file_index);
         // // void BackupWriterDefault::copyFileFromDisk
         // 这里的writer其实是 BackupWriterDisk::copyFileFromDisk或者BackupWriterS3::copyFileFromDisk
+        LOG_INFO(log, "mydebug is encrypted by disk {}, base_size is {}, info.size is {}", info.encrypted_by_disk, info.base_size, info.size);
         writer->copyFileFromDisk(info.data_file_name, src_disk, src_file_path, info.encrypted_by_disk, info.base_size, info.size - info.base_size);
     }
     else

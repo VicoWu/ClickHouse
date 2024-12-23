@@ -236,7 +236,7 @@ namespace
                     size_t part_size = next_position - position; /// `part_size` is either `normal_part_size` or smaller if it's the final part.
 
                     Stopwatch watch;
-
+                    // UploadHelper::uploadPart
                     uploadPart(part_number, position, part_size);
                     watch.stop();
 
@@ -472,6 +472,7 @@ namespace
 
         void fillPutRequest(S3::PutObjectRequest & request)
         {
+            // create_read_buffer的创建在方法BackupWriterDefault::copyFileFromDisk 中
             auto read_buffer = std::make_unique<LimitSeekableReadBuffer>(create_read_buffer(), offset, size);
 
             request.SetBucket(dest_bucket);
@@ -812,7 +813,7 @@ void copyDataToS3File(
     bool for_disk_s3)
 {
     CopyDataToFileHelper helper{create_read_buffer, offset, size, dest_s3_client, dest_bucket, dest_key, settings, object_metadata, schedule, for_disk_s3};
-    helper.performCopy();
+    helper.performCopy(); // CopyDataToFileHelper::performCopy
 }
 
 

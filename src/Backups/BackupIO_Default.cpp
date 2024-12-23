@@ -93,7 +93,7 @@ void BackupWriterDefault::copyDataToFile(const String & path_in_backup, const Cr
         read_buffer->seek(start_pos, SEEK_SET);
 
     auto write_buffer = writeFile(path_in_backup);
-
+    // void copyData(ReadBuffer & from, WriteBuffer & to, size_t bytes)
     copyData(*read_buffer, *write_buffer, length);
     write_buffer->finalize();
 }
@@ -122,18 +122,22 @@ void BackupWriterDefault::copyFileFromDisk(const String & path_in_backup, DiskPt
 {
     // 在这个位置，备份到s3和备份到disk到书来给你是一样的，为什么readFile中LocalReadThrottlerBytes会翻倍呢？
     LOG_TRACE(log, "Copying file {} from disk {} through buffers", src_path, src_disk->getName());
-
     auto create_read_buffer = [src_disk, src_path, copy_encrypted, settings = read_settings.adjustBufferSize(start_pos + length)]
     {
-        if (copy_encrypted)
+        if (copy_encrypted) {
+            LOG_INFO(log, "mydebug this is an ecrypted file");
             return src_disk->readEncryptedFile(src_path, settings);
+        }
+
         else
-            // 在这里调用 BackupWriterDisk::readFile(const String & file_name, size_t expected_file_size) 或者 BackupWriterS3::readFile(const String & file_name, size_t expected_file_size)
             // 这里只是定义了一个callback
+            {
+            LOG_INFO(log, "mydebug this is not an ecrypted file");
             return src_disk->readFile(src_path, settings);
+            }
     };
 
-    // void BackupWriterS3::copyDataToFile 或 void BackupWriterDisk::copyDataToFile
+    // void BackupWriterS3::copyDataToFile 或 void BackupWriterDefault::copyDataToFile
     copyDataToFile(path_in_backup, create_read_buffer, start_pos, length);
 }
 }
