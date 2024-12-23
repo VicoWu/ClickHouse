@@ -315,7 +315,7 @@ void DiskLocal::replaceFile(const String & from_path, const String & to_path)
 
 std::unique_ptr<ReadBufferFromFileBase> DiskLocal::readFile(const String & path, const ReadSettings & settings, std::optional<size_t> read_hint, std::optional<size_t> file_size) const
 {
-    LOG_INFO(logger, "DiskLocal::readFile read file with path {} and file size {}", path, file_size);
+    LOG_INFO(logger, "DiskLocal::readFile read file with path {}", path);
     if (!file_size.has_value())
         file_size = fileSizeSafe(fs::path(disk_path) / path);
     return createReadBufferFromFileBase(fs::path(disk_path) / path, settings, read_hint, file_size);
