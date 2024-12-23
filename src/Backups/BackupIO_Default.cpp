@@ -125,14 +125,14 @@ void BackupWriterDefault::copyFileFromDisk(const String & path_in_backup, DiskPt
     auto create_read_buffer = [src_disk, src_path, copy_encrypted, settings = read_settings.adjustBufferSize(start_pos + length)]
     {
         if (copy_encrypted) {
-            LOG_INFO(log, "mydebug this is an ecrypted file");
+            LOG_INFO(&Poco::Logger::get("BackupWriterDefault"), "mydebug this is an ecrypted file");
             return src_disk->readEncryptedFile(src_path, settings);
         }
 
         else
             // 这里只是定义了一个callback
             {
-            LOG_INFO(log, "mydebug this is not an ecrypted file");
+            LOG_INFO(&Poco::Logger::get("BackupWriterDefault"), "mydebug this is not an ecrypted file");
             return src_disk->readFile(src_path, settings);
             }
     };

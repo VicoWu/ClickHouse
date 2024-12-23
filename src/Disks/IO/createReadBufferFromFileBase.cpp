@@ -43,9 +43,9 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
     char * existing_memory,
     size_t alignment)
 {
-//    LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer from file {}, size {}, local_fs_method = {}",
-//             filename, file_size,
-//             settings.local_fs_method);
+    LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer from file {}, local_fs_method = {}",
+             filename,
+             settings.local_fs_method);
     if (file_size.has_value() && !*file_size)
         return std::make_unique<ReadBufferFromEmptyFile>();
 
@@ -88,7 +88,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
 
         if (settings.local_fs_method == LocalFSReadMethod::read)
         {
-//            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer ReadBufferFromFile from file {}, size {} with local throttle", filename, file_size);
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer ReadBufferFromFile from file {} with local throttle", filename);
             res = std::make_unique<ReadBufferFromFile>( // 在这里构造
                 filename,
                 buffer_size,
@@ -100,7 +100,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
         }
         else if (settings.local_fs_method == LocalFSReadMethod::pread || settings.local_fs_method == LocalFSReadMethod::mmap)
         {
-//            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer ReadBufferFromFilePReadWithDescriptorsCache from file {}, size {} with local throttle", filename, file_size);
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer ReadBufferFromFilePReadWithDescriptorsCache from file {} with local throttle", filename, );
             res = std::make_unique<ReadBufferFromFilePReadWithDescriptorsCache>(
                 filename,
                 buffer_size,
@@ -116,7 +116,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
             static std::shared_ptr<IOUringReader> reader = std::make_shared<IOUringReader>(512);
             if (!reader->isSupported())
                 throw Exception(ErrorCodes::UNSUPPORTED_METHOD, "io_uring is not supported by this system");
-//            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer AsynchronousReadBufferFromFileWithDescriptorsCache from file {}, size {} with local throttle", filename, file_size);
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer AsynchronousReadBufferFromFileWithDescriptorsCache from file {},with local throttle", filename);
 
             res = std::make_unique<AsynchronousReadBufferFromFileWithDescriptorsCache>(
                 *reader,
@@ -148,7 +148,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
         }
         else if (settings.local_fs_method == LocalFSReadMethod::pread_threadpool)
         {
-//            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer AsynchronousReadBufferFromFileWithDescriptorsCache from file {}, size {} with local throttle", filename, file_size);
+            LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating read buffer AsynchronousReadBufferFromFileWithDescriptorsCache from file {} with local throttle", filename);
             auto & reader = getThreadPoolReader(FilesystemReaderType::ASYNCHRONOUS_LOCAL_FS_READER);
             res = std::make_unique<AsynchronousReadBufferFromFileWithDescriptorsCache>(
                 reader,
@@ -218,7 +218,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
         }
     }
 #endif
-//    LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating Ordinary ReadBufferFromFile from file {}", filename);
+    LOG_INFO(&Poco::Logger::get("ReadBufferFromFileBase"), "mydebug Creating Ordinary ReadBufferFromFile from file {}", filename);
 
     ProfileEvents::increment(ProfileEvents::CreatedReadBufferOrdinary);
 
