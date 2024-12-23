@@ -877,6 +877,8 @@ void BackupImpl::writeFile(const BackupFileInfo & info, BackupEntryPtr entry)
     else if (src_disk && from_immutable_file)
     {
         LOG_TRACE(log, "Writing backup for file {} from {} (disk {}): data file #{}", info.data_file_name, src_file_desc, src_disk->getName(), info.data_file_index);
+        // // void BackupWriterDefault::copyFileFromDisk
+        // 这里的writer其实是 BackupWriterDisk::copyFileFromDisk或者BackupWriterS3::copyFileFromDisk
         writer->copyFileFromDisk(info.data_file_name, src_disk, src_file_path, info.encrypted_by_disk, info.base_size, info.size - info.base_size);
     }
     else

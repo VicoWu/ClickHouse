@@ -91,8 +91,12 @@ UInt64 BackupWriterFile::getFileSize(const String & file_name)
     return fs::file_size(root_path / file_name);
 }
 
+
 std::unique_ptr<ReadBuffer> BackupWriterFile::readFile(const String & file_name, size_t expected_file_size)
 {
+    /**
+        * std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase
+    */
     return createReadBufferFromFileBase(root_path / file_name, read_settings.adjustBufferSize(expected_file_size));
 }
 

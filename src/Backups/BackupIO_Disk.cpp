@@ -76,6 +76,10 @@ UInt64 BackupWriterDisk::getFileSize(const String & file_name)
     return disk->getFileSize(root_path / file_name);
 }
 
+/**
+* 调用者是 BackupWriterDefault::copyDataToFile(path_in_backup, create_read_buffer, start_pos, length);
+  对比 BackupWriterS3::readFile
+*/
 std::unique_ptr<ReadBuffer> BackupWriterDisk::readFile(const String & file_name, size_t expected_file_size)
 {
     return disk->readFile(root_path / file_name, read_settings.adjustBufferSize(expected_file_size));
@@ -103,6 +107,10 @@ void BackupWriterDisk::removeFiles(const Strings & file_names)
         disk->removeDirectory(root_path);
 }
 
+/**
+* 比如将文件备份到本地磁盘
+* 调用者是 BackupImpl::writeFile
+*/
 void BackupWriterDisk::copyFileFromDisk(const String & path_in_backup, DiskPtr src_disk, const String & src_path,
                                         bool copy_encrypted, UInt64 start_pos, UInt64 length)
 {

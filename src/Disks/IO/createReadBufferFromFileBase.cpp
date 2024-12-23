@@ -29,6 +29,10 @@ namespace ErrorCodes
     extern const int UNSUPPORTED_METHOD;
 }
 
+/**
+* 调用者是
+     BackupWriterDisk::readFile 或者 BackupWriterS3::readFile
+*/
 std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase(
     const std::string & filename,
     const ReadSettings & settings,

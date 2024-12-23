@@ -49,7 +49,10 @@ std::string ReadBufferFromFileDescriptor::getFileName() const
     return "(fd = " + toString(fd) + ")";
 }
 
-
+/**
+* 调用者是
+* std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase
+*/
 size_t ReadBufferFromFileDescriptor::readImpl(char * to, size_t min_bytes, size_t max_bytes, size_t offset)
 {
     chassert(min_bytes <= max_bytes);
