@@ -9,7 +9,7 @@
 #include <Common/filesystemHelpers.h>
 #include <IO/AsynchronousReadBufferFromFileDescriptor.h>
 #include <IO/WriteHelpers.h>
-
+#include <Common/logger_useful.h>
 
 namespace ProfileEvents
 {
@@ -96,7 +96,13 @@ bool AsynchronousReadBufferFromFileDescriptor::nextImpl()
         assert(offset <= size);
         size_t bytes_read = size - offset;
         if (throttler)
-            throttler->add(bytes_read, ProfileEvents::LocalReadThrottlerBytes, ProfileEvents::LocalReadThrottlerSleepMicroseconds);
+            {
+             	LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileDescriptor"),
+                         "mydebug prefetch is valid reading {} for offset {} and size {} to {}",
+                         getFileName(), offset, bytes_read, size);
+                throttler->add(bytes_read, ProfileEvents::LocalReadThrottlerBytes, ProfileEvents::LocalReadThrottlerSleepMicroseconds);
+            }
+
 
         if (bytes_read)
         {
@@ -122,8 +128,13 @@ bool AsynchronousReadBufferFromFileDescriptor::nextImpl()
 
         assert(offset <= size);
         size_t bytes_read = size - offset;
-        if (throttler)
-            throttler->add(bytes_read, ProfileEvents::LocalReadThrottlerBytes, ProfileEvents::LocalReadThrottlerSleepMicroseconds);
+        if (throttler){
+             LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileDescriptor"),
+                         "mydebug prefetch is invalid reading {} for offset {} and size {} to {}",
+                         getFileName(), offset, bytes_read, size);
+             throttler->add(bytes_read, ProfileEvents::LocalReadThrottlerBytes, ProfileEvents::LocalReadThrottlerSleepMicroseconds);
+        }
+
 
         if (bytes_read)
         {
@@ -184,6 +195,9 @@ AsynchronousReadBufferFromFileDescriptor::~AsynchronousReadBufferFromFileDescrip
 /// If 'offset' is small enough to stay in buffer after seek, then true seek in file does not happen.
 off_t AsynchronousReadBufferFromFileDescriptor::seek(off_t offset, int whence)
 {
+    LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileDescriptor"),
+                         "mydebug trying to reset to offset {} with whence {} for file {} ",
+                         offset, whence, getFileName());
     size_t new_pos;
     if (whence == SEEK_SET)
     {
@@ -252,6 +266,8 @@ off_t AsynchronousReadBufferFromFileDescriptor::seek(off_t offset, int whence)
 
 void AsynchronousReadBufferFromFileDescriptor::rewind()
 {
+    LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileDescriptor"),
+                         "mydebug rewinded for file {}", getFileName());
     if (prefetch_future.valid())
     {
         prefetch_future.wait();

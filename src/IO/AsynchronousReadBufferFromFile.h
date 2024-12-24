@@ -3,7 +3,7 @@
 #include <Common/Throttler_fwd.h>
 #include <IO/AsynchronousReadBufferFromFileDescriptor.h>
 #include <IO/OpenedFileCache.h>
-
+#include <Common/logger_useful.h>
 
 namespace DB
 {
@@ -71,6 +71,8 @@ public:
     {
         file = OpenedFileCache::instance().get(file_name, flags);
         fd = file->getFD();
+        LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileWithDescriptorsCache"),
+                 "mydebug file {} with descriptor {}", file_name, fd);
     }
 
     ~AsynchronousReadBufferFromFileWithDescriptorsCache() override;
