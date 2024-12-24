@@ -10,6 +10,7 @@
 #include <IO/AsynchronousReadBufferFromFileDescriptor.h>
 #include <IO/WriteHelpers.h>
 #include <Common/logger_useful.h>
+#include <boost/stacktrace.hpp>
 
 namespace ProfileEvents
 {
@@ -132,6 +133,8 @@ bool AsynchronousReadBufferFromFileDescriptor::nextImpl()
              LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileDescriptor"),
                          "mydebug prefetch is invalid reading {} for offset {} and size {} to {}",
                          getFileName(), offset, bytes_read, size);
+             // 这里每次读取的bytes_read 是 131072，即128KB,这个日志一共打印了1454，即读取了1454 * 128KB/1024 = 181MB, 而这个文件的大小是91M,刚好是两倍
+             // 如果是备份到本地， 那么这个日志打印了727次
              throttler->add(bytes_read, ProfileEvents::LocalReadThrottlerBytes, ProfileEvents::LocalReadThrottlerSleepMicroseconds);
         }
 
@@ -198,6 +201,11 @@ off_t AsynchronousReadBufferFromFileDescriptor::seek(off_t offset, int whence)
     LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileDescriptor"),
                          "mydebug trying to reset to offset {} with whence {} for file {} ",
                          offset, whence, getFileName());
+    if (getFileName() == "/conviva/data/nvme2n1/clickhouse/store/86c/86c91233-2b33-43e4-8a1e-10f0daa3801b/20240802_2_2_0/deviceHardwareType.bin") {
+        LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileDescriptor"),
+                         " Currently it is seek to offset {} with whence {} for file {}. stacktrace is {}",
+                 offset, whence, getFileName(), boost::stacktrace::stacktrace());
+    }
     size_t new_pos;
     if (whence == SEEK_SET)
     {

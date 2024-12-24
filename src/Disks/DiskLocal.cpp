@@ -313,11 +313,15 @@ void DiskLocal::replaceFile(const String & from_path, const String & to_path)
     fs::rename(from_file, to_file);
 }
 
+/**
+* 调用者是 void BackupWriterDefault::copyFileFromDisk
+*/
 std::unique_ptr<ReadBufferFromFileBase> DiskLocal::readFile(const String & path, const ReadSettings & settings, std::optional<size_t> read_hint, std::optional<size_t> file_size) const
 {
     LOG_INFO(logger, "DiskLocal::readFile read file with path {}", path);
     if (!file_size.has_value())
         file_size = fileSizeSafe(fs::path(disk_path) / path);
+    // 在这里创建 AsynchronousReadBufferFromFileWithDescriptorsCache并返回
     return createReadBufferFromFileBase(fs::path(disk_path) / path, settings, read_hint, file_size);
 }
 

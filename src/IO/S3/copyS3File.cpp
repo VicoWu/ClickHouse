@@ -453,8 +453,8 @@ namespace
         // 调用者是 void copyDataToS3File
         void performCopy()
         {
-            if (size <= upload_settings.max_single_part_upload_size)
-                performSinglepartUpload();
+            if (size <= upload_settings.max_single_part_upload_size) // 这个值是32MB
+                performSinglepartUpload(); //  小于32mb, 单part上传
             else
                 performMultipartUpload(); // 搜索 void performMultipartUpload()
 
@@ -806,7 +806,7 @@ namespace
 * 调用者是 BackupWriterS3::copyDataToFile
 */
 void copyDataToS3File(
-    const std::function<std::unique_ptr<SeekableReadBuffer>()> & create_read_buffer,
+    const std::function<std::unique_ptr<SeekableReadBuffer>()> & create_read_buffer, // 返回一个 AsynchronousReadBufferFromFileWithDescriptorsCache
     size_t offset,
     size_t size,
     const std::shared_ptr<const S3::Client> & dest_s3_client,

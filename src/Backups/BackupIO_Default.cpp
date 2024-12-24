@@ -82,7 +82,7 @@ std::unique_ptr<ReadBufferFromFileBase> createReadBufferFromFileBase
 这个是从磁盘备份到磁盘的调用逻辑
 调用者是 void BackupWriterDisk::copyFileFromDisk
 
-对应 BackupWriterS3::copyDataToFile的调用者是void BackupWriterDisk::copyFileFromDisk
+对应s3的调用路径是 BackupWriterS3::copyDataToFile，调用者是void BackupWriterDisk::copyFileFromDisk
 */
 void BackupWriterDefault::copyDataToFile(const String & path_in_backup, const CreateReadBufferFunction & create_read_buffer, UInt64 start_pos, UInt64 length)
 {
@@ -133,6 +133,9 @@ void BackupWriterDefault::copyFileFromDisk(const String & path_in_backup, DiskPt
             // 这里只是定义了一个callback
             {
             LOG_INFO(&Poco::Logger::get("BackupWriterDefault"), "mydebug this is not an ecrypted file");
+            // std::unique_ptr<ReadBufferFromFileBase> DiskLocal::readFile
+            // 无论是备份到本地还是远程，这里都会调用
+            // 返回的是 AsynchronousReadBufferFromFileWithDescriptorsCache
             return src_disk->readFile(src_path, settings);
             }
     };
