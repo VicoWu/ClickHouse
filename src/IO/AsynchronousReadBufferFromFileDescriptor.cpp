@@ -202,9 +202,10 @@ off_t AsynchronousReadBufferFromFileDescriptor::seek(off_t offset, int whence)
                          "mydebug trying to reset to offset {} with whence {} for file {} ",
                          offset, whence, getFileName());
     if (getFileName() == "/conviva/data/nvme2n1/clickhouse/store/86c/86c91233-2b33-43e4-8a1e-10f0daa3801b/20240802_2_2_0/deviceHardwareType.bin") {
+        std::string stacktrace_str = boost::stacktrace::to_string(boost::stacktrace::stacktrace());
         LOG_INFO(&Poco::Logger::get("AsynchronousReadBufferFromFileDescriptor"),
                          " Currently it is seek to offset {} with whence {} for file {}. stacktrace is {}",
-                 offset, whence, getFileName(), boost::stacktrace::stacktrace());
+                          offset, whence, getFileName(), stacktrace_str);
     }
     size_t new_pos;
     if (whence == SEEK_SET)
