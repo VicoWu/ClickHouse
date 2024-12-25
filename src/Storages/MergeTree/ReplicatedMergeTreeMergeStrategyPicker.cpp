@@ -45,14 +45,19 @@ bool ReplicatedMergeTreeMergeStrategyPicker::isMergeFinishedByReplica(const Stri
     return false;
 }
 
-
+/**
+ * 如果 execute_merges_on_single_replica_time_threshold > 0， 并且当前的entry的确是merge，
+ * 并且当前时间尚早，则应该在单个副本上执行merge操作，这时候会选择一个副本执行merge操作
+ * @param entry
+ * @return
+ */
 bool ReplicatedMergeTreeMergeStrategyPicker::shouldMergeOnSingleReplica(const ReplicatedMergeTreeLogEntryData & entry) const
 {
     time_t threshold = execute_merges_on_single_replica_time_threshold;
     return (
-        threshold > 0       /// feature turned on
+        threshold > 0       /// feature turned on，默认是0
         && entry.type == ReplicatedMergeTreeLogEntry::MERGE_PARTS /// it is a merge log entry
-        && entry.create_time + threshold > time(nullptr)          /// not too much time waited
+        && entry.create_time + threshold > time(nullptr)          /// not too much time waited 还没有等待足够的时间，当前时间尚早
     );
 }
 

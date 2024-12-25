@@ -118,7 +118,6 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
 
     if (data_settings->max_number_of_mutations_for_replica > 0 &&
         occupied >= data_settings->max_number_of_mutations_for_replica)
-        LOG_INFO()
         return 0;
 
     /// DataPart can be store only at one disk. Get maximum reservable free space at all disks.

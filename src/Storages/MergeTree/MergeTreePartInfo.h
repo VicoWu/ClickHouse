@@ -62,8 +62,27 @@ struct MergeTreePartInfo
     /// True if contains rhs (this part is obtained by merging rhs with some other parts or mutating rhs)
     bool contains(const MergeTreePartInfo & rhs) const
     {
+        /**
+         * 完全包含
+            当前分区：partition_id="p1", min_block=0, max_block=10, level=2, mutation=0
+                目标分区：partition_id="p1", min_block=2, max_block=5, level=1, mutation=0
+                判断逻辑：
+                    partition_id 相同。
+                        当前分区块范围 [0, 10] 覆盖目标分区 [2, 5]。
+                当前分区的 level=2 大于目标分区的 level=1。
+                返回 true。
+           当前分区：partition_id="p1", min_block=0, max_block=5, level=2, mutation=0
+                目标分区：partition_id="p1", min_block=6, max_block=10, level=1, mutation=0
+                判断逻辑：
+                partition_id 相同。
+                当前分区块范围 [0, 5] 无法覆盖目标分区 [6, 10]。
+                返回 false。
+
+         */
         /// Containing part may have equal level iff block numbers are equal (unless level is MAX_LEVEL)
         /// (e.g. all_0_5_2 does not contain all_0_4_2, but all_0_5_3 or all_0_4_2_9 do)
+        // 如果两个part的level相同，那么，必须要求min_block和max_block也相同，或者，如果min_block和max_block不相同，那么必须是特殊的level
+        // all_0_5_2 和 all_0_4_2的level相同，但是min_block和max_block不相同，这不是包含关系
         bool strictly_contains_block_range = (min_block == rhs.min_block && max_block == rhs.max_block) || level > rhs.level
             || level == MAX_LEVEL || level == LEGACY_MAX_LEVEL;
         return partition_id == rhs.partition_id        /// Parts for different partitions are not merged

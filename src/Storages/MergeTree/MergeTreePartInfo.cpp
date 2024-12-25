@@ -17,6 +17,7 @@ namespace ErrorCodes
 
 MergeTreePartInfo MergeTreePartInfo::fromPartName(const String & part_name, MergeTreeDataFormatVersion format_version)
 {
+    // MergeTreePartInfo::tryParsePartName
     if (auto part_opt = tryParsePartName(part_name, format_version))
         return *part_opt;
     else
@@ -49,8 +50,8 @@ std::optional<MergeTreePartInfo> MergeTreePartInfo::tryParsePartName(
 {
     ReadBufferFromString in(part_name);
 
-    String partition_id;
-
+    String partition_id; // 分区标识符
+    // 旧格式
     if (format_version < MERGE_TREE_DATA_MIN_FORMAT_VERSION_WITH_CUSTOM_PARTITIONING)
     {
         UInt32 min_yyyymmdd = 0;
@@ -67,7 +68,7 @@ std::optional<MergeTreePartInfo> MergeTreePartInfo::tryParsePartName(
         partition_id = toString(min_yyyymmdd / 100);
     }
     else
-    {
+    { // 新格式
         while (!in.eof())
         {
             char c;
@@ -75,7 +76,7 @@ std::optional<MergeTreePartInfo> MergeTreePartInfo::tryParsePartName(
             if (c == '_')
                 break;
 
-            partition_id.push_back(c);
+            partition_id.push_back(c); // 读取到partition id
         }
     }
 

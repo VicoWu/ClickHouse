@@ -263,8 +263,14 @@ std::unique_ptr<ReadBuffer> BackupWriterS3::readFile(const String & file_name, s
             false, 0, 0, false, expected_file_size);
 }
 
+/**
+ * 调用者是 BackupsWorker::writeBackupEntries
+ * @param file_name
+ * @return
+ */
 std::unique_ptr<WriteBuffer> BackupWriterS3::writeFile(const String & file_name)
 {
+    // 在这里会对Buffer进行限速
     return std::make_unique<WriteBufferFromS3>(
         client,
         s3_uri.bucket,

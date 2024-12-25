@@ -4495,27 +4495,62 @@ void MergeTreeData::delayMutationOrThrowIfNeeded(Poco::Event * until, const Cont
 MergeTreeData::DataPartPtr MergeTreeData::getActiveContainingPart(
     const MergeTreePartInfo & part_info, MergeTreeData::DataPartState state, DataPartsLock & /*lock*/) const
 {
+    // boost::iterator_range<DataPartIteratorByStateAndInfo> getDataPartsStateRange
+    // 从MergeTreeData 中获取对应状态的range
     auto current_state_parts_range = getDataPartsStateRange(state);
 
     /// The part can be covered only by the previous or the next one in data_parts.
+    // 在有序集合中找到第一个可能匹配的分区，即大于等于
+    MergeTreeData::DataPartPtr MergeTreeData::getActiveContainingPart(
+        const MergeTreePartInfo & part_info, MergeTreeData::DataPartState state, DataPartsLock & /*lock*/) const
+    {
+        // boost::iterator_range<DataPartIteratorByStateAndInfo> getDataPartsStateRange
+        // 从MergeTreeData 中获取对应状态的range
+        auto current_state_parts_range = getDataPartsStateRange(state);
+
+        /// The part can be covered only by the previous or the next one in data_parts.
+        // 在有序集合中找到第一个可能匹配的分区，即大于或者等于{state, part_info}的元素
+        auto it = data_parts_by_state_and_info.lower_bound(DataPartStateAndInfo{state, part_info});
+
+        if (it != current_state_parts_range.end())
+        {
+            if ((*it)->info == part_info)
+                return *it;
+            // 关于contains方法，参考 bool contains(const MergeTreePartInfo & rhs) const
+            if ((*it)->info.contains(part_info)) // 包含关系
+                return *it;
+        }
+
+        // 没有超出指定指定范围
+        if (it != current_state_parts_range.begin())
+        {
+            --it; // 向前移动一个位置
+            if ((*it)->info.contains(part_info))  // 包含关系
+                return *it;
+        }
+
+        return nullptr; // 没找到
+    }
     auto it = data_parts_by_state_and_info.lower_bound(DataPartStateAndInfo{state, part_info});
 
     if (it != current_state_parts_range.end())
     {
         if ((*it)->info == part_info)
             return *it;
-        if ((*it)->info.contains(part_info))
+        // 关于contains方法，参考 bool contains(const MergeTreePartInfo & rhs) const
+        if ((*it)->info.contains(part_info)) // 包含关系
             return *it;
     }
 
+    // 没有超出指定指定范围
     if (it != current_state_parts_range.begin())
     {
-        --it;
-        if ((*it)->info.contains(part_info))
+        --it; // 向前移动一个位置
+        if ((*it)->info.contains(part_info))  // 包含关系
             return *it;
     }
 
-    return nullptr;
+    return nullptr; // 没找到
 }
 
 
@@ -4569,11 +4604,14 @@ void MergeTreeData::swapActivePart(MergeTreeData::DataPartPtr part_copy)
 MergeTreeData::DataPartPtr MergeTreeData::getActiveContainingPart(const MergeTreePartInfo & part_info) const
 {
     auto lock = lockParts();
+    // MergeTreeData::DataPartPtr MergeTreeData::getActiveContainingPart(
+    // 在指定的DataPartState::Active状态下，在所有的parts中，根据part_info，获取对应的DataPart
     return getActiveContainingPart(part_info, DataPartState::Active, lock);
 }
 
 MergeTreeData::DataPartPtr MergeTreeData::getActiveContainingPart(const String & part_name) const
 {
+    // MergeTreePartInfo MergeTreePartInfo::fromPartName, 返回一个MergeTreePartInfo
     auto part_info = MergeTreePartInfo::fromPartName(part_name, format_version);
     return getActiveContainingPart(part_info);
 }

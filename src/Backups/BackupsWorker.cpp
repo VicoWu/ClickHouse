@@ -525,7 +525,7 @@ void BackupsWorker::writeBackupEntries(BackupMutablePtr backup, BackupEntries &&
                     if (exception)
                         return;
                 }
-
+                // 查看 BackupImpl::writeFile
                 backup->writeFile(file_info, std::move(entry));
                 // Update metadata
                 if (!internal)

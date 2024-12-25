@@ -159,7 +159,7 @@ public:
     /// Auxiliary structure for index comparison. Keep in mind lifetime of MergeTreePartInfo.
     struct DataPartStateAndInfo
     {
-        DataPartState state;
+        DataPartState state; // enum class MergeTreeDataPartState
         const MergeTreePartInfo & info;
     };
 
@@ -172,6 +172,9 @@ public:
 
     STRONG_TYPEDEF(String, PartitionID)
 
+    /**
+     * 基于 info 或 partition_id
+     */
     struct LessDataPart
     {
         using is_transparent = void;
@@ -183,6 +186,9 @@ public:
         bool operator()(const PartitionID & lhs, const MergeTreePartInfo & rhs) const { return lhs.toUnderType() < rhs.partition_id; }
     };
 
+    /**
+     * 先比较 state，再比较 info 或 partition_id
+     */
     struct LessStateDataPart
     {
         using is_transparent = void;
@@ -1119,13 +1125,21 @@ protected:
         return {part->getState(), part->info};
     }
 
+    /**
+     *
+     定义了一个 boost::multi_index_container 类型的 DataPartsIndexes，
+     它使用了 Boost 的 multi_index_container 来创建一个容器，支持多个索引（indexed_by）。multi_index_container
+     允许我们根据多个不同的字段（索引）对元素进行查询，并能够高效地管理和检索数据。这里我们可以看到两个不同的索引，每个索引都有不同的用途和比较方法。
+     */
     using DataPartsIndexes = boost::multi_index_container<DataPartPtr,
         boost::multi_index::indexed_by<
             /// Index by Info
+            // 按 DataPartInfo 排序
             boost::multi_index::ordered_unique<
                 boost::multi_index::tag<TagByInfo>,
                 boost::multi_index::global_fun<const DataPartPtr &, const MergeTreePartInfo &, dataPartPtrToInfo>
             >,
+            // 按 (State, Info) 排序
             /// Index by (State, Info), is used to obtain ordered slices of parts with the same state
             boost::multi_index::ordered_unique<
                 boost::multi_index::tag<TagByStateAndInfo>,
@@ -1138,8 +1152,8 @@ protected:
     /// Current set of data parts.
     mutable std::mutex data_parts_mutex;
     DataPartsIndexes data_parts_indexes;
-    DataPartsIndexes::index<TagByInfo>::type & data_parts_by_info;
-    DataPartsIndexes::index<TagByStateAndInfo>::type & data_parts_by_state_and_info;
+    DataPartsIndexes::index<TagByInfo>::type & data_parts_by_info; // 基于Info进行索引的结构
+    DataPartsIndexes::index<TagByStateAndInfo>::type & data_parts_by_state_and_info; // 基于State和Info进行索引的结构
 
     /// Mutex for critical sections which alter set of parts
     /// It is like truncate, drop/detach partition
@@ -1176,6 +1190,9 @@ protected:
 
     boost::iterator_range<DataPartIteratorByStateAndInfo> getDataPartsStateRange(DataPartState state) const
     {
+        /**
+         * 第一个 不小于 给定元素 x 的位置
+         */
         auto begin = data_parts_by_state_and_info.lower_bound(state, LessStateDataPart());
         auto end = data_parts_by_state_and_info.upper_bound(state, LessStateDataPart());
         return {begin, end};

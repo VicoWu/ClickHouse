@@ -3377,7 +3377,8 @@ void StorageReplicatedMergeTree::mergeSelectingTask()
                     std::optional<std::pair<Int64, int>> desired_mutation_version = merge_pred->getDesiredMutationVersion(part);
                     if (!desired_mutation_version)
                         continue;
-
+                    //  // 从这里可以看到，一个part会有一个mutation log entry。所以，
+                    //  即使我们trigger了一个partition的mutation，也会对应很多的Log Entry Task，每个Task负责一个part
                     create_result = createLogEntryToMutatePart(
                         *part,
                         future_merged_part->uuid,
@@ -3779,16 +3780,17 @@ String StorageReplicatedMergeTree::findReplicaHavingPart(const String & part_nam
     std::shuffle(replicas.begin(), replicas.end(), thread_local_rng);
 
     LOG_TRACE(log, "Candidate replicas: {}", replicas.size());
-
+    // 遍历zookeeper下面所有的replica
     for (const String & replica : replicas)
     {
         /// We aren't interested in ourself.
-        if (replica == replica_name)
+        if (replica == replica_name) // 这是自己对应的replica
             continue;
 
         LOG_TRACE(log, "Candidate replica: {}", replica);
-
+        // 直接按照这个replica拼接对应的part名字
         if (checkReplicaHavePart(replica, part_name) &&
+            // 如果要求active，那么必须存在 is_active子节点
             (!active || zookeeper->exists(fs::path(zookeeper_path) / "replicas" / replica / "is_active")))
             return replica;
 

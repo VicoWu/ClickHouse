@@ -18,22 +18,24 @@ ReplicatedMergeMutateTaskBase::PrepareResult MutateFromLogEntryTask::prepare()
     const String & source_part_name = entry.source_parts.at(0);
     const auto storage_settings_ptr = storage.getSettings();
     LOG_TRACE(log, "Executing log entry to mutate part {} to {}", source_part_name, entry.new_part_name);
-
+    // MergeTreeData::DataPartPtr MergeTreeData::getActiveContainingPart(const String & part_name)
+    // 根据这个part_name，查找对应的DataPartPtr(std::shared_ptr<const DataPart>)
     MergeTreeData::DataPartPtr source_part = storage.getActiveContainingPart(source_part_name);
-    if (!source_part)
+    if (!source_part) // 没找到
     {
         LOG_DEBUG(log, "Source part {} for {} is missing; will try to fetch it instead. "
             "Either pool for fetches is starving, see background_fetches_pool_size, or none of active replicas has it",
             source_part_name, entry.new_part_name);
         return PrepareResult{
             .prepared_successfully = false,
-            .need_to_check_missing_part_in_fetch = true,
+            .need_to_check_missing_part_in_fetch = true, // 可能从其他的replica进行fetch
             .part_log_writer = {}
         };
     }
 
-    if (source_part->name != source_part_name)
+    if (source_part->name != source_part_name) // 从entry中得到的part的名字，和当前我们查找出来的DataPart的名字不一致（有可能只是包含关系）
     {
+        // source_part_name 被 source_part包含
         LOG_WARNING(log,
             "Part {} is covered by {} but should be mutated to {}. "
             "Possibly the mutation of this part is not needed and will be skipped. "
@@ -41,8 +43,8 @@ ReplicatedMergeMutateTaskBase::PrepareResult MutateFromLogEntryTask::prepare()
             source_part_name, source_part->name, entry.new_part_name);
 
         return PrepareResult{
-            .prepared_successfully = false,
-            .need_to_check_missing_part_in_fetch = true,
+            .prepared_successfully = false, // 准备失败
+            .need_to_check_missing_part_in_fetch = true, // 可能从其他的replica进行fetch
             .part_log_writer = {}
         };
     }
@@ -50,18 +52,21 @@ ReplicatedMergeMutateTaskBase::PrepareResult MutateFromLogEntryTask::prepare()
     /// TODO - some better heuristic?
     size_t estimated_space_for_result = MergeTreeDataMergerMutator::estimateNeededDiskSpace({source_part});
 
+    // 如果这个entry创建的时间已经超过了prefer_fetch_merged_part_time_threshold时间，并且，预估空间大于prefer_fetch_merged_part_size_threshold
+    // 也就是说，这次的mutation又老又大
     if (entry.create_time + storage_settings_ptr->prefer_fetch_merged_part_time_threshold.totalSeconds() <= time(nullptr)
         && estimated_space_for_result >= storage_settings_ptr->prefer_fetch_merged_part_size_threshold)
     {
         /// If entry is old enough, and have enough size, and some replica has the desired part,
         /// then prefer fetching from replica.
+        // 找到一个有这个Replica的part
         String replica = storage.findReplicaHavingPart(entry.new_part_name, true);    /// NOTE excessive ZK requests for same data later, may remove.
-        if (!replica.empty())
+        if (!replica.empty()) // 找到了
         {
             LOG_DEBUG(log, "Prefer to fetch {} from replica {}", entry.new_part_name, replica);
             return PrepareResult{
                 .prepared_successfully = false,
-                .need_to_check_missing_part_in_fetch = true,
+                .need_to_check_missing_part_in_fetch = true, // 可能从其他的replica进行fetch
                 .part_log_writer = {}
             };
         }
@@ -70,7 +75,8 @@ ReplicatedMergeMutateTaskBase::PrepareResult MutateFromLogEntryTask::prepare()
     /// In some use cases merging can be more expensive than fetching
     /// and it may be better to spread merges tasks across the replicas
     /// instead of doing exactly the same merge cluster-wise
-
+    // ReplicatedMergeTreeMergeStrategyPicker::shouldMergeOnSingleReplica
+    // 当前是MutateFromLogEntryTask，这个entry->type肯定是MUTATE_PART，这时候，shouldMergeOnSingleReplica肯定返回false
     if (storage.merge_strategy_picker.shouldMergeOnSingleReplica(entry))
     {
         std::optional<String> replica_to_execute_merge = storage.merge_strategy_picker.pickReplicaToExecuteMerge(entry);
@@ -88,9 +94,10 @@ ReplicatedMergeMutateTaskBase::PrepareResult MutateFromLogEntryTask::prepare()
 
         }
     }
-
+    // MergeTreePartInfo MergeTreePartInfo::fromPartName
     new_part_info = MergeTreePartInfo::fromPartName(entry.new_part_name, storage.format_version);
     Strings mutation_ids;
+    // ReplicatedMergeTreeQueue::getMutationCommands
     commands = std::make_shared<MutationCommands>(storage.queue.getMutationCommands(source_part, new_part_info.mutation, mutation_ids));
     LOG_TRACE(log, "Mutating part {} with mutation commands from {} mutations ({}): {}",
               entry.new_part_name, commands->size(), fmt::join(mutation_ids, ", "), commands->toString());
