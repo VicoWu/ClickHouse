@@ -236,7 +236,7 @@ namespace
                     size_t part_size = next_position - position; /// `part_size` is either `normal_part_size` or smaller if it's the final part.
 
                     Stopwatch watch;
-                    // UploadHelper::uploadPart
+                    // UploadHelper::uploadPart，从position开始，上传part_size大小
                     uploadPart(part_number, position, part_size);
                     watch.stop();
 
@@ -351,6 +351,7 @@ namespace
                 try
                 {
                     // CopyDataToFileHelper::fillUploadPartRequest
+                    // 在这里会调用create_read_buffer回调
                     task->req = fillUploadPartRequest(part_number, part_offset, part_size);
 
                     schedule([this, task, task_finish_notify]()

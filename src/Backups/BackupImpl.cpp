@@ -889,6 +889,7 @@ void BackupImpl::writeFile(const BackupFileInfo & info, BackupEntryPtr entry)
     {
         LOG_TRACE(log, "Writing backup for file {} from {}: data file #{}", info.data_file_name, src_file_desc, info.data_file_index);
         auto create_read_buffer = [entry, read_settings = writer->getReadSettings()] { return entry->getReadBuffer(read_settings); };
+        // BackupWriterS3::copyDataToFile
         writer->copyDataToFile(info.data_file_name, create_read_buffer, info.base_size, info.size - info.base_size);
     }
 

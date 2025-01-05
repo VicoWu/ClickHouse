@@ -69,6 +69,7 @@ void AsynchronousReadBufferFromFileDescriptor::prefetch(Priority priority)
 
     /// Will request the same amount of data that is read in nextImpl.
     prefetch_buffer.resize(internal_buffer.size());
+    // 异步的方式将数据读取到prefetch_buffer.data()中
     prefetch_future = asyncReadInto(prefetch_buffer.data(), prefetch_buffer.size(), priority);
 }
 
@@ -84,7 +85,7 @@ bool AsynchronousReadBufferFromFileDescriptor::nextImpl()
         {
             Stopwatch watch;
             CurrentMetrics::Increment metric_increment{CurrentMetrics::AsynchronousReadWait};
-            auto result = prefetch_future.get();
+            auto result = prefetch_future.get(); // 等待预取结束，读取完成以后，读取到的数据放在prefetch_buffer.data中，result中不存放数据，只存放读取的结果
             ProfileEvents::increment(ProfileEvents::AsynchronousReadWaitMicroseconds, watch.elapsedMicroseconds());
             size = result.size;
             offset = result.offset;
