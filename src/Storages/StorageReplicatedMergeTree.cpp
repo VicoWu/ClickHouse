@@ -9443,6 +9443,12 @@ void StorageReplicatedMergeTree::backupData(
     backup_entries_collector.addPostTask(post_collecting_task);
 }
 
+/**
+ * 调用者是 RestorerFromBackup::insertDataToTable
+ * @param restorer
+ * @param data_path_in_backup
+ * @param partitions
+ */
 void StorageReplicatedMergeTree::restoreDataFromBackup(RestorerFromBackup & restorer, const String & data_path_in_backup, const std::optional<ASTs> & partitions)
 {
     String full_zk_path = getZooKeeperName() + getZooKeeperPath();
@@ -9469,7 +9475,7 @@ void StorageReplicatedMergeTree::restoreDataFromBackup(RestorerFromBackup & rest
         if (!empty && backup->hasFiles(data_path_in_backup))
             restorer.throwTableIsNotEmpty(getStorageID());
     }
-
+    // void MergeTreeData::restorePartsFromBackup
     restorePartsFromBackup(restorer, data_path_in_backup, partitions);
 }
 

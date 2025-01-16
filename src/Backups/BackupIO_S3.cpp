@@ -126,6 +126,9 @@ UInt64 BackupReaderS3::getFileSize(const String & file_name)
     return objects[0].GetSize();
 }
 
+/**
+ * 从S3读取文件，这里也会有throttle
+ */
 std::unique_ptr<SeekableReadBuffer> BackupReaderS3::readFile(const String & file_name)
 {
     return std::make_unique<ReadBufferFromS3>(
@@ -184,6 +187,7 @@ void BackupReaderS3::copyFileToDisk(const String & path_in_backup, size_t file_s
         return; /// copied!
     }
 
+    // 将文件从S3拷贝到本地
     /// Fallback to copy through buffers.
     BackupReaderDefault::copyFileToDisk(path_in_backup, file_size, encrypted_in_backup, destination_disk, destination_path, write_mode);
 }
@@ -235,6 +239,9 @@ void BackupWriterS3::copyFileFromDisk(const String & path_in_backup, DiskPtr src
     BackupWriterDefault::copyFileFromDisk(path_in_backup, src_disk, src_path, copy_encrypted, start_pos, length);
 }
 
+/**
+ * 将文件拷贝到S3
+ */
 void BackupWriterS3::copyDataToFile(const String & path_in_backup, const CreateReadBufferFunction & create_read_buffer, UInt64 start_pos, UInt64 length)
 {
     copyDataToS3File(create_read_buffer, start_pos, length, client, s3_uri.bucket, fs::path(s3_uri.key) / path_in_backup, request_settings, {},

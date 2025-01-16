@@ -135,7 +135,8 @@ RestorerFromBackup::DataRestoreTasks RestorerFromBackup::run(Mode mode)
     /// Create tables using the create queries read from the backup.
     setStage(Stage::CREATING_TABLES);
     removeUnresolvedDependencies();
-    createTables();
+    // RestorerFromBackup::createTables()
+    createTables(); // 创建表并把恢复的数据插入到表中
 
     /// All what's left is to insert data to tables.
     /// No more data restoring tasks are allowed after this point.
@@ -769,6 +770,9 @@ void RestorerFromBackup::checkTable(const QualifiedTableName & table_name)
     }
 }
 
+/**
+ * RestorerFromBackup::createTables()
+ */
 void RestorerFromBackup::insertDataToTable(const QualifiedTableName & table_name)
 {
     if (restore_settings.structure_only)
@@ -788,6 +792,7 @@ void RestorerFromBackup::insertDataToTable(const QualifiedTableName & table_name
                 "Table engine {} doesn't support partitions",
                 storage->getName());
         }
+        // 调用 StorageReplicatedMergeTree::restoreDataFromBackup
         storage->restoreDataFromBackup(*this, data_path_in_backup, partitions);
     }
     catch (Exception & e)
@@ -811,6 +816,10 @@ void RestorerFromBackup::addDataRestoreTasks(DataRestoreTasks && new_tasks)
     insertAtEnd(data_restore_tasks, std::move(new_tasks));
 }
 
+/**
+ * restorer.addDataRestoreTask(
+ * @return
+ */
 RestorerFromBackup::DataRestoreTasks RestorerFromBackup::getDataRestoreTasks()
 {
     if (data_restore_tasks.empty())

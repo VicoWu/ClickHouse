@@ -23,14 +23,16 @@ void BackupReaderDefault::copyFileToDisk(const String & path_in_backup, size_t f
                                          DiskPtr destination_disk, const String & destination_path, WriteMode write_mode)
 {
     LOG_TRACE(log, "Copying file {} to disk {} through buffers", path_in_backup, destination_disk->getName());
-
+    // BackupReaderS3::readFile
+    // ReadBufferFromS3::nextImpl()里面会有throttle
     auto read_buffer = readFile(path_in_backup);
 
     std::unique_ptr<WriteBuffer> write_buffer;
     auto buf_size = std::min(file_size, write_buffer_size);
+    // 关于write_settings, 参考 BackupReaderDefault::BackupReaderDefault的构造
     if (encrypted_in_backup)
         write_buffer = destination_disk->writeEncryptedFile(destination_path, buf_size, write_mode, write_settings);
-    else
+    else // DiskLocal::writeFile, 可以看到，这里用的是local_throttle
         write_buffer = destination_disk->writeFile(destination_path, buf_size, write_mode, write_settings);
 
     copyData(*read_buffer, *write_buffer, file_size);

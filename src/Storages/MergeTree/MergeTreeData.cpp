@@ -5274,6 +5274,13 @@ private:
     mutable std::mutex mutex;
 };
 
+/**
+ * 调用者是 StorageReplicatedMergeTree::restoreDataFromBackup
+ * RestorerFromBackup的构造搜索  RestorerFromBackup restorer{restore_query->elements, restore_settings, restore_coordination,
+ * @param restorer
+ * @param data_path_in_backup
+ * @param partitions
+ */
 void MergeTreeData::restorePartsFromBackup(RestorerFromBackup & restorer, const String & data_path_in_backup, const std::optional<ASTs> & partitions)
 {
     std::optional<std::unordered_set<String>> partition_ids;
@@ -5308,6 +5315,7 @@ void MergeTreeData::restorePartsFromBackup(RestorerFromBackup & restorer, const 
              part_path_in_backup = data_path_in_backup_fs / part_name,
              my_part_info = *part_info,
              restored_parts_holder]
+            // MergeTreeData::restorePartFromBackup
             { storage->restorePartFromBackup(restored_parts_holder, my_part_info, part_path_in_backup); });
 
         ++num_parts;
@@ -5316,9 +5324,13 @@ void MergeTreeData::restorePartsFromBackup(RestorerFromBackup & restorer, const 
     restored_parts_holder->setNumParts(num_parts);
 }
 
+/**
+ * 调用者是 void MergeTreeData::restorePartsFromBackup
+ */
 void MergeTreeData::restorePartFromBackup(std::shared_ptr<RestoredPartsHolder> restored_parts_holder, const MergeTreePartInfo & part_info, const String & part_path_in_backup) const
 {
     String part_name = part_info.getPartNameAndCheckFormat(format_version);
+    // 关于Backup的构造，搜索 BackupPtr backup = BackupFactory::instance().createBackup(backup_open_params);
     auto backup = restored_parts_holder->getBackup();
 
     UInt64 total_size_of_part = 0;

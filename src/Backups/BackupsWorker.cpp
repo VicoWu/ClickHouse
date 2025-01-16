@@ -743,6 +743,7 @@ void BackupsWorker::doRestore(
             {
                 RestorerFromBackup restorer{restore_query->elements, restore_settings, restore_coordination,
                                             backup, context};
+                // 搜索 RestorerFromBackup::DataRestoreTasks RestorerFromBackup::run(Mode mode)
                 data_restore_tasks = restorer.run(RestorerFromBackup::RESTORE);
             }
 
