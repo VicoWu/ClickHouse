@@ -251,7 +251,9 @@ class DynamicRuntimeQueue : public DynamicRuntimeQueueImpl<RoundRobinRuntimeQueu
  *  Another nuisance that we face is that background operations always interact with an associated Storage.
  *  So, when a Storage wants to shutdown, it must wait until all its background operations are finished.
  */
+// 构造的时候在 shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
 template <class Queue>
+
 class MergeTreeBackgroundExecutor final : boost::noncopyable
 {
 public:

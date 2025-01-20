@@ -128,7 +128,8 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
     if (occupied <= 1
         || max_tasks_count - occupied >= data_settings->number_of_free_entries_in_pool_to_execute_mutation)
         return static_cast<UInt64>(disk_space / DISK_USAGE_COEFFICIENT_TO_RESERVE);
-
+    // 如果 max_tasks_count - occupied < number_of_free_entries_in_pool_to_execute_mutation，那么不可以mutate
+    // 所以，如果 number_of_free_entries_in_pool_to_execute_mutation很小，那么mutation 就不会
     return 0;
 }
 

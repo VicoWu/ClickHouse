@@ -55,6 +55,7 @@ void BackgroundJobsAssignee::postpone()
 bool BackgroundJobsAssignee::scheduleMergeMutateTask(ExecutableTaskPtr merge_task)
 {
     // 返回对应的 MergeTreeBackgroundExecutor::trySchedule
+    // 返回true的时候，说明task已经被送到了pending 队列中去了
     bool res = getContext()->getMergeMutateExecutor()->trySchedule(merge_task);
     res ? trigger() : postpone();
     return res;

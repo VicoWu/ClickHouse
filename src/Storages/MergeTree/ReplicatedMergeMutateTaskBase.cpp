@@ -27,7 +27,10 @@ void ReplicatedMergeMutateTaskBase::onCompleted()
     task_result_callback(successfully_executed);
 }
 
-
+/**
+ * 在 void MergeTreeBackgroundExecutor<Queue>::routine 中被调用
+ * @return
+ */
 bool ReplicatedMergeMutateTaskBase::executeStep()
 {
     /// Metrics will be saved in the local profile_counters.
@@ -43,7 +46,7 @@ bool ReplicatedMergeMutateTaskBase::executeStep()
 
         try
         {
-            return executeImpl();
+            return executeImpl(); // 直接返回 ReplicatedMergeMutateTaskBase::executeImpl的调度结果
         }
         catch (const Exception & e)
         {
@@ -126,6 +129,12 @@ bool ReplicatedMergeMutateTaskBase::executeStep()
 }
 
 
+/**
+ * 在 bool ReplicatedMergeMutateTaskBase::executeStep() 中调用
+ * 由于存在NEEDS_PREPARE 等多种状态，因此这个方法可能会被调用多次
+ * 这个方法返回true，代表还需要接着执行，返回false，代表已经必须要接着调度了
+ * @return
+ */
 bool ReplicatedMergeMutateTaskBase::executeImpl()
 {
     std::optional<ThreadGroupSwitcher> switcher;
