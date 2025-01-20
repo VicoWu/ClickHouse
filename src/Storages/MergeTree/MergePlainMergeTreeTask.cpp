@@ -120,7 +120,7 @@ void MergePlainMergeTreeTask::prepare()
                 query_counters.incrementNoTrace(i, task_counters_snapshot[i]);
         }
     };
-
+    // 返回一个MergeTask
     merge_task = storage.merger_mutator.mergePartsToTemporaryPart(
             future_part,
             metadata_snapshot,

@@ -122,6 +122,12 @@ size_t MergeTreeBackgroundExecutor<Queue>::getMaxTasksCount() const
     return max_tasks_count.load(std::memory_order_relaxed);
 }
 
+/**
+ * 在 scheduleMergeMutateTask方法中被调用
+ * @tparam Queue
+ * @param task
+ * @return
+ */
 template <class Queue>
 bool MergeTreeBackgroundExecutor<Queue>::trySchedule(ExecutableTaskPtr task)
 {
