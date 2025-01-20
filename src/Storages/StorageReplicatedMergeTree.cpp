@@ -3221,6 +3221,7 @@ bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssigne
     else if (job_type == LogEntry::MERGE_PARTS)
     {
         LOG_INFO(log, "MY_DEBUG start to schedule LogEntry::MERGE_PARTS.");
+        // 需要区分MergeFromLogEntryTask 和 MergePlainMergeTreeTask
         auto task = std::make_shared<MergeFromLogEntryTask>(selected_entry, *this, common_assignee_trigger);
         assignee.scheduleMergeMutateTask(task); // 将会调用trySchedule
         return true;

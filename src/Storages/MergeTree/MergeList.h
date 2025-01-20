@@ -128,8 +128,8 @@ private:
     using Parent = BackgroundProcessList<MergeListElement, MergeInfo>;
     std::atomic<size_t> merges_with_ttl_counter = 0;
 public:
-    MergeList()
-        : Parent(CurrentMetrics::Merge)
+    MergeList() // 在 MergePlainMergeTreeTask::prepare()和 MergeFromLogEntryTask::prepare()中，都会增加 CurrentMetrics::Merge
+        : Parent(CurrentMetrics::Merge) // 搜索构造方法 class BackgroundProcessListEntry，查看Gauge Metrics CurrentMetrics::Merge 增加和降低
     {}
 
     void onEntryDestroy(const Parent::Entry & entry) override

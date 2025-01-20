@@ -27,9 +27,9 @@ public:
     BackgroundProcessListEntry & operator=(const BackgroundProcessListEntry &) = delete;
 
     BackgroundProcessListEntry(BackgroundProcessListEntry &&) noexcept = default;
-
+    // 在EntryPtr insert(Args &&... args)中构造
     BackgroundProcessListEntry(BackgroundProcessList<ListElement, Info> & list_, const typename container_t::iterator it_, const CurrentMetrics::Metric & metric)
-        : list(list_), it{it_}, metric_increment{metric}
+        : list(list_), it{it_}, metric_increment{metric} // 每创建一个BackgroundProcessListEntry，这个metric(CurrentMetrics::Merge)会加1
     {
         list.onEntryCreate(*this);
     }
@@ -67,10 +67,11 @@ public:
 
     using Entry = BackgroundProcessListEntry<ListElement, Info>;
     using EntryPtr = std::unique_ptr<Entry>;
-
+    // 调用位置 搜搜 getMergeList().insert
     template <typename... Args>
     EntryPtr insert(Args &&... args)
     {
+        // 生成一个BackgroundProcessListEntry， 同时Gauge Metrics CurrentMetrics::Merge会加1
         std::lock_guard lock{mutex};
         auto entry = std::make_unique<Entry>(*this, entries.emplace(entries.end(), std::forward<Args>(args)...), metric);
         return entry;

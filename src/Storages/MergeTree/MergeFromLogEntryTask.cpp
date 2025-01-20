@@ -265,6 +265,7 @@ ReplicatedMergeMutateTaskBase::PrepareResult MergeFromLogEntryTask::prepare()
     task_context->setCurrentQueryId("");
 
     /// Add merge to list
+    // 这里会增加 CurrentMetrics::Merge的值
     merge_mutate_entry = storage.getContext()->getMergeList().insert(
         storage.getStorageID(),
         future_merged_part,
