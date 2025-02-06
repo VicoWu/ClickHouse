@@ -190,9 +190,18 @@ HashTablesStatistics & getHashTablesStatistics()
     return hash_tables_stats;
 }
 
+/**
+ * 只有当
+ *     group_by_two_level_threshold不等于0 并且  result_size > group_by_two_level_threshold
+ *  或者
+ *     group_by_two_level_threshold_bytes不等于0 并且 result_size_bytes > group_by_two_level_threshold_bytes
+ *     worthConvertToTwoLevel才会返回true
+ *
+ */
 bool worthConvertToTwoLevel(
     size_t group_by_two_level_threshold, size_t result_size, size_t group_by_two_level_threshold_bytes, auto result_size_bytes)
 {
+    // 如果
     // params.group_by_two_level_threshold will be equal to 0 if we have only one thread to execute aggregation (refer to AggregatingStep::transformPipeline).
     return (group_by_two_level_threshold && result_size >= group_by_two_level_threshold)
         || (group_by_two_level_threshold_bytes && result_size_bytes >= static_cast<Int64>(group_by_two_level_threshold_bytes));
@@ -214,11 +223,17 @@ DB::AggregatedDataVariants::Type convertToTwoLevelTypeIfPossible(DB::AggregatedD
     UNREACHABLE();
 }
 
+/**
+ * 聚合过程中初始化哈希表结构 (AggregatedDataVariants) 并根据输入数据的大小动态调整哈希表的预分配策略
+ */
 void initDataVariantsWithSizeHint(
-    DB::AggregatedDataVariants & result, DB::AggregatedDataVariants::Type method_chosen, const DB::Aggregator::Params & params)
+    DB::AggregatedDataVariants & result, // 聚合的数据存储容器，用于存储聚合后的中间结果。支持多种哈希表实现。
+    DB::AggregatedDataVariants::Type method_chosen,  // 选择的哈希表类型，例如 HashMap, TwoLevelHashMap 等。
+    const DB::Aggregator::Params & params // 聚合参数配置
+    )
 {
     const auto & stats_collecting_params = params.stats_collecting_params;
-    if (stats_collecting_params.isCollectionAndUseEnabled())
+    if (stats_collecting_params.isCollectionAndUseEnabled()) // 统计
     {
         if (auto hint = getHashTablesStatistics().getSizeHint(stats_collecting_params))
         {
