@@ -252,13 +252,16 @@ ProcessList::insert(const String & query_, const IAST * ast, ContextMutablePtr q
             ///  since allocation and deallocation could happen in different threads
         }
 
+        // 在processes末尾插入一个QueryStatus对象，构造QueryStatus的时候，向priorities中插入了这个query的priority信息
         auto process_it = processes.emplace(
             processes.end(),
             std::make_shared<QueryStatus>(
                 query_context,
                 query_,
                 client_info,
-                priorities.insert(static_cast<int>(settings.priority)),
+                // 用户在query的时候设置priority，向priorities中插入这个新的query的priority信息
+                // insert返回了一个 std::shared_ptr<HandleImpl>
+                priorities.insert(static_cast<int>(settings.priority)), // 调用 Handle insert(Priority priority)
                 std::move(thread_group),
                 query_kind,
                 settings,

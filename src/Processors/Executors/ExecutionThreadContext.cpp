@@ -40,6 +40,19 @@ static bool checkCanAddAdditionalInfoToException(const DB::Exception & exception
            && exception.code() != ErrorCodes::QUERY_WAS_CANCELLED;
 }
 
+/**
+* PipelineExecutor::executeImpl  --| // 单线程
+* PipelineExecutor::spawnThreads() | // 多线程
+*                                 -> PipelineExecutor::executeSingleThread
+*                                        -> PipelineExecutor::executeStepImpl
+*                                             -> ExecutionThreadContext::executeTask()
+*                                                    -> ExecutionThreadContext::executeJob // 在这里会调用on_progress方法
+ * @param node 这里的node指的是Execution Graph中的节点，而不是指具体的某一个机器节点，对于这个 ExecutionThreadContext，node其实就是赋予给ExecutionThreadContext
+ * 进行执行的task
+ *
+ * ExecutionThreadContext::executeJob
+ * @param read_progress_callback 被所有的ExecutionThreadContext共享的read_progress_callback
+ */
 static void executeJob(ExecutingGraph::Node * node, ReadProgressCallback * read_progress_callback)
 {
     try
@@ -49,16 +62,16 @@ static void executeJob(ExecutingGraph::Node * node, ReadProgressCallback * read_
         /// Update read progress only for source nodes.
         bool is_source = node->back_edges.empty();
 
-        if (is_source && read_progress_callback)
+        if (is_source && read_progress_callback) // 只有当节点是source 节点，才更新read progress
         {
             if (auto read_progress = node->processor->getReadProgress())
             {
-                if (read_progress->counters.total_rows_approx)
+                if (read_progress->counters.total_rows_approx) // 搜索 void addTotalRowsApprox(size_t value)
                     read_progress_callback->addTotalRowsApprox(read_progress->counters.total_rows_approx);
 
-                if (read_progress->counters.total_bytes)
+                if (read_progress->counters.total_bytes) // 搜索 void addTotalBytes(size_t value)
                     read_progress_callback->addTotalBytes(read_progress->counters.total_bytes);
-
+                // 搜索 void onProgress(size_t value)
                 if (!read_progress_callback->onProgress(read_progress->counters.read_rows, read_progress->counters.read_bytes, read_progress->limits))
                     node->processor->cancel();
             }
@@ -73,6 +86,17 @@ static void executeJob(ExecutingGraph::Node * node, ReadProgressCallback * read_
     }
 }
 
+/**
+ * 在 PipelineExecutor::executeStepImpl中被调用
+* PipelineExecutor::executeImpl  --| // 单线程
+* PipelineExecutor::spawnThreads() | // 多线程
+*                                 -> PipelineExecutor::executeSingleThread
+*                                        -> PipelineExecutor::executeStepImpl
+*                                             -> ExecutionThreadContext::executeTask()
+*                                                    -> ExecutionThreadContext::executeJob // 在这里会调用on_progress方法
+ * 执行赋予给这个ExecutionThreadContext对象的Task
+ * @return
+ */
 bool ExecutionThreadContext::executeTask()
 {
     std::unique_ptr<OpenTelemetry::SpanHolder> span;
@@ -93,6 +117,7 @@ bool ExecutionThreadContext::executeTask()
 
     try
     {
+        // 在 void ExecutorTasks::init 方法中可以看到，一个Query的所有ExecutionThreadContext是共享一个read_progress_callback对象的
         executeJob(node, read_progress_callback);
         ++node->num_executed_jobs;
     }

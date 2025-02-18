@@ -149,10 +149,10 @@ bool PipelineExecutor::executeStep(std::atomic_bool * yield_flag)
 
     if (!tasks.isFinished())
         return true;
-
+    // 执行到这里，说明并不是所有的task都执行结束了
     /// Execution can be stopped because of exception. Check and rethrow if any.
     for (auto & node : graph->nodes)
-        if (node->exception)
+        if (node->exception) // 任何一个节点发生异常，都抛出异常
             std::rethrow_exception(node->exception);
 
     single_thread_cpu_slot.reset();
@@ -188,9 +188,13 @@ bool PipelineExecutor::checkTimeLimit()
 
 void PipelineExecutor::setReadProgressCallback(ReadProgressCallbackPtr callback)
 {
+    // 设置这个PipelineExecutor的read_progress_callback,  ReadProgressCallback
     read_progress_callback = std::move(callback);
 }
 
+/**
+ * 一个 PipelineExecutor管理了多个ExecutionThreadContext对象，负责整个graph
+ */
 void PipelineExecutor::finalizeExecution()
 {
     checkTimeLimit();
@@ -199,7 +203,7 @@ void PipelineExecutor::finalizeExecution()
         return;
 
     bool all_processors_finished = true;
-    for (auto & node : graph->nodes)
+    for (auto & node : graph->nodes) // 遍历整个graph中的所有节点
     {
         if (node->status != ExecutingGraph::ExecStatus::Finished)
         {
@@ -207,7 +211,7 @@ void PipelineExecutor::finalizeExecution()
             all_processors_finished = false;
             break;
         }
-        else if (node->processor && read_progress_callback)
+        else if (node->processor && read_progress_callback) //
         {
             /// Some executors might have reported progress as part of their finish() call
             /// For example, when reading from parallel replicas the coordinator will cancel the queries as soon as it
@@ -216,15 +220,16 @@ void PipelineExecutor::finalizeExecution()
             /// To cover these cases we check if there is any pending progress in the processors to report
             if (auto read_progress = node->processor->getReadProgress())
             {
-                if (read_progress->counters.total_rows_approx)
+                if (read_progress->counters.total_rows_approx) // 搜索 void addTotalRowsApprox(size_t value)
                     read_progress_callback->addTotalRowsApprox(read_progress->counters.total_rows_approx);
 
-                if (read_progress->counters.total_bytes)
+                if (read_progress->counters.total_bytes) // 搜索 void addTotalBytes(size_t value)
                     read_progress_callback->addTotalBytes(read_progress->counters.total_bytes);
 
                 /// We are finalizing the execution, so no need to call onProgress if there is nothing to report
+                // 只要存在已经读取的行数或者存在已经读取的字节数，那么就需要调用onProgress方法
                 if (read_progress->counters.read_rows || read_progress->counters.read_bytes)
-                    read_progress_callback->onProgress(
+                    read_progress_callback->onProgress( // 搜索 void onProgress(size_t value)
                         read_progress->counters.read_rows, read_progress->counters.read_bytes, read_progress->limits);
             }
         }
@@ -249,6 +254,17 @@ void PipelineExecutor::executeSingleThread(size_t thread_num)
 #endif
 }
 
+/**
+ * 针对 编号为thread_num的线程，执行对应的step
+ * PipelineExecutor::executeImpl  --| // 单线程
+ * PipelineExecutor::spawnThreads() | // 多线程
+ *                                 -> PipelineExecutor::executeSingleThread
+ *                                        -> PipelineExecutor::executeStepImpl
+ *                                             -> ExecutionThreadContext::executeTask()
+ *                                                    -> ExecutionThreadContext::executeJob // 在这里会调用on_progress方法
+ * @param thread_num 当前的线程编号
+ * @param yield_flag
+ */
 void PipelineExecutor::executeStepImpl(size_t thread_num, std::atomic_bool * yield_flag)
 {
 #ifndef NDEBUG
@@ -262,9 +278,11 @@ void PipelineExecutor::executeStepImpl(size_t thread_num, std::atomic_bool * yie
     {
         /// First, find any processor to execute.
         /// Just traverse graph and prepare any processor.
+        // 如果当前的 ExecutionThreadContext 还没有对应的task，那么，就试图获取一个task，放入到这个ExecutionThreadContext中，即，用这个
+        // ExecutionThreadContext 去执行这个task
         while (!tasks.isFinished() && !context.hasTask())
-            tasks.tryGetTask(context);
-
+            tasks.tryGetTask(context); // 从tasks中获取一个task，放到context中
+        // 只要这个ExecutionThreadContext还有这个task，并且没有强行终止，就不停检测
         while (context.hasTask() && !yield)
         {
             if (tasks.isFinished())
@@ -342,7 +360,7 @@ void PipelineExecutor::initializeExecution(size_t num_threads, bool concurrency_
     tasks.init(num_threads, use_threads, profile_processors, trace_processors, read_progress_callback.get());
     tasks.fill(queue);
 
-    if (num_threads > 1)
+    if (num_threads > 1) // 如果不是一个thread，那么就使用pool来管理
         pool = std::make_unique<ThreadPool>(CurrentMetrics::QueryPipelineExecutorThreads, CurrentMetrics::QueryPipelineExecutorThreadsActive, CurrentMetrics::QueryPipelineExecutorThreadsScheduled, num_threads);
 }
 

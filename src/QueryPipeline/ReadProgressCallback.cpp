@@ -18,6 +18,7 @@ namespace ErrorCodes
     extern const int TOO_MANY_BYTES;
 }
 
+// std::shared_ptr<QueryStatus>;
 void ReadProgressCallback::setProcessListElement(QueryStatusPtr elem)
 {
     process_list_elem = elem;
@@ -43,6 +44,10 @@ void ReadProgressCallback::setProcessListElement(QueryStatusPtr elem)
     }
 }
 
+/**
+ * using StorageLimitsList = std::list<StorageLimits>
+
+ */
 bool ReadProgressCallback::onProgress(uint64_t read_rows, uint64_t read_bytes, const StorageLimitsList & storage_limits)
 {
     for (const auto & limits : storage_limits)
@@ -52,24 +57,29 @@ bool ReadProgressCallback::onProgress(uint64_t read_rows, uint64_t read_bytes, c
     }
 
     size_t rows_approx = 0;
-    if ((rows_approx = total_rows_approx.exchange(0)) != 0)
+    // total_rows_approx 是一个 std::atomic_size_t 类型的对象，表示一个原子变量,
+    // exchange(0) 的意思是将 total_rows_approx 的当前值与 0 交换。即：把 total_rows_approx 的当前值设置为 0，并返回交换前的原始值。
+    if ((rows_approx = total_rows_approx.exchange(0)) != 0) // 如果 total_rows_approx中之前存放的值不是0，那么设置为0，并且执行下面的逻辑
     {
+        // 查看构造函数 Progress(UInt64 read_rows_, UInt64 read_bytes_, UInt64 total_rows_to_read_ = 0, UInt64 total_bytes_to_read_ = 0)
         Progress total_rows_progress = {0, 0, rows_approx};
+        // 如果定义了progress_callback这个function
+        if (progress_callback) // using ProgressCallback = std::function<void(const Progress & progress)>;
+            progress_callback(total_rows_progress); // 调用progress_callback这个function
 
-        if (progress_callback)
-            progress_callback(total_rows_progress);
-
-        if (process_list_elem)
+        // 如果这个ReadProgressCallback对象中注册了对应的Query的QueryStatus对象，那么会调用QueryStatus::updateProgressIn
+        if (process_list_elem) // process_list_elem其实就是这个Query对应的QueryStatus
             process_list_elem->updateProgressIn(total_rows_progress);
     }
 
     size_t bytes = 0;
-    if ((bytes = total_bytes.exchange(0)) != 0)
+    if ((bytes = total_bytes.exchange(0)) != 0)  // 如果 total_bytes 中之前存放的值不是0，那么设置为0，并且执行下面的逻辑
     {
+        // 查看构造函数 Progress(UInt64 read_rows_, UInt64 read_bytes_, UInt64 total_rows_to_read_ = 0, UInt64 total_bytes_to_read_ = 0)
         Progress total_bytes_progress = {0, 0, 0, bytes};
 
         if (progress_callback)
-            progress_callback(total_bytes_progress);
+            progress_callback(total_bytes_progress);// 调用progress_callback这个function
 
         if (process_list_elem)
             process_list_elem->updateProgressIn(total_bytes_progress);
@@ -78,7 +88,7 @@ bool ReadProgressCallback::onProgress(uint64_t read_rows, uint64_t read_bytes, c
     Progress value {read_rows, read_bytes};
 
     if (progress_callback)
-        progress_callback(value);
+        progress_callback(value); // 调用progress_callback这个function
 
     if (process_list_elem)
     {

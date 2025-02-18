@@ -96,7 +96,7 @@ protected:
     /// They are saved in the constructor to limit the overhead of each call to checkTimeLimit()
     ExecutionSpeedLimits limits;
     OverflowMode overflow_mode;
-
+    // 在构造 std::make_shared<QueryStatus>的时候，向priorities中插入了这个QueryStatus对应的Query的priority信息
     QueryPriorities::Handle priority_handle = nullptr;
 
     /// True if query cancellation is in progress right now
@@ -202,12 +202,22 @@ public:
         return &thread_group->memory_tracker;
     }
 
+    /**
+     * 这是 QueryStatus::updateProgressIn
+     * Progress定义在Progress.h中
+     * @param value
+     * @return
+     */
     bool updateProgressIn(const Progress & value)
     {
-        CurrentThread::updateProgressIn(value);
-        progress_in.incrementPiecewiseAtomically(value);
+        CurrentThread::updateProgressIn(value); // 搜搜 CurrentThread::updateProgressIn
+        progress_in.incrementPiecewiseAtomically(value); // 更新对应的Query的InputStream的status
 
-        if (priority_handle)
+        if (priority_handle) // 如果Query设置了priority，那么QueryPriorities::Handle就不为空
+            // 表示一个**持续时间（duration）**为 1 秒的时间对象。
+            // 它是 std::chrono 这个标准库时间库中的一部分，属于 std::chrono::duration 类型的实例
+            // 搜索 void waitIfNeed(Duration timeout)
+            // 最多只等一秒,或者一秒内收到了其它Query执行完成的通知
             priority_handle->waitIfNeed(std::chrono::seconds(1));        /// NOTE Could make timeout customizable.
 
         return !is_killed.load(std::memory_order_relaxed);
@@ -216,7 +226,7 @@ public:
     bool updateProgressOut(const Progress & value)
     {
         CurrentThread::updateProgressOut(value);
-        progress_out.incrementPiecewiseAtomically(value);
+        progress_out.incrementPiecewiseAtomically(value); // 更新对应的Query的OutputStream的status
 
         return !is_killed.load(std::memory_order_relaxed);
     }
@@ -356,7 +366,7 @@ public:
     using QueryAmount = UInt64;
 
     /// list, for iterators not to invalidate. NOTE: could replace with cyclic buffer, but not worth.
-    using Container = std::list<Element>;
+    using Container = std::list<Element>; // 这是一个QueryStatus的list结构
     using Info = std::vector<QueryStatusInfo>;
     using UserInfo = std::unordered_map<String, ProcessListForUserInfo>;
 

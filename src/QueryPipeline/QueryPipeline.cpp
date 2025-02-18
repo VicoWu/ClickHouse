@@ -575,6 +575,9 @@ void QueryPipeline::setProgressCallback(const ProgressCallback & callback)
     progress_callback = callback;
 }
 
+/**
+ * 把这个QueryStatus对象设置到这个QueryPipelien中
+ */
 void QueryPipeline::setProcessListElement(QueryStatusPtr elem)
 {
     process_list_element = elem;
@@ -724,10 +727,17 @@ void QueryPipeline::convertStructureTo(const ColumnsWithTypeAndName & columns)
     addExpression(extremes, actions, *processors);
 }
 
+/**
+ * 构造一个 ReadProgressCallback 对象并返回，这个ReadProgressCallback对象将会设置到对应的PipelineExecutor中去
+ * 搜 getReadProgressCallback()可以看到，getReadProgressCallback()返回的ReadProgressCallback对象通过方法
+ * PipelineExecutor::setReadProgressCallback 设置到 PipelineExecutor 中
+ * @return
+ */
 std::unique_ptr<ReadProgressCallback> QueryPipeline::getReadProgressCallback() const
 {
+    // 构造一个ReadProgressCallback对象
     auto callback = std::make_unique<ReadProgressCallback>();
-
+    // 将progress_callback这个function设置到 ReadProgressCallback 对象中
     callback->setProgressCallback(progress_callback);
     callback->setQuota(quota);
     callback->setProcessListElement(process_list_element);

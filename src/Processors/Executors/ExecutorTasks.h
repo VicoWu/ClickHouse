@@ -60,13 +60,13 @@ public:
     void tryWakeUpAnyOtherThreadWithTasks(ExecutionThreadContext & self, std::unique_lock<std::mutex> & lock);
     void tryGetTask(ExecutionThreadContext & context);
     void pushTasks(Queue & queue, Queue & async_queue, ExecutionThreadContext & context);
-
+    // 在 PipelineExecutor::initializeExecution中被调用
     void init(size_t num_threads_, size_t use_threads_, bool profile_processors, bool trace_processors, ReadProgressCallback * callback);
     void fill(Queue & queue);
     void upscale(size_t use_threads_);
 
     void processAsyncTasks();
-
+    // 从executor_contexts中获取线程编号为thread_num的ExecutionThreadContext
     ExecutionThreadContext & getThreadContext(size_t thread_num) { return *executor_contexts[thread_num]; }
 };
 

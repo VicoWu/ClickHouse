@@ -9,6 +9,7 @@ namespace DB
 class ReadProgressCallback;
 
 /// Context for each executing thread of PipelineExecutor.
+// 搜索 ExecutionThreadContext 查看其构造的地方， 在 ExecutorTasks::init方法中被构造
 class ExecutionThreadContext
 {
 private:
@@ -69,7 +70,7 @@ public:
 
     void setException(std::exception_ptr exception_) { exception = exception_; }
     void rethrowExceptionIfHas();
-
+    // 在 void ExecutorTasks::init中被构造
     explicit ExecutionThreadContext(size_t thread_number_, bool profile_processors_, bool trace_processors_, ReadProgressCallback * callback)
         : read_progress_callback(callback)
         , thread_number(thread_number_)

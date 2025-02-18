@@ -19,9 +19,9 @@ namespace ErrorCodes
 
 void CurrentThread::updatePerformanceCounters()
 {
-    if (unlikely(!current_thread))
+    if (unlikely(!current_thread)) // current_thread is a type of ThreadStatus
         return;
-    current_thread->updatePerformanceCounters();
+    current_thread->updatePerformanceCounters(); // 搜索 ThreadStatus::updatePerformanceCounters()
 }
 
 void CurrentThread::updatePerformanceCountersIfNeeded()
