@@ -113,7 +113,7 @@ private:
 
     mutable UserPtr user;
     std::optional<UUID> user_id;
-
+    // using ContextMutablePtr = std::shared_ptr<Context>;
     ContextMutablePtr session_context;
     mutable bool query_context_created = false;
 

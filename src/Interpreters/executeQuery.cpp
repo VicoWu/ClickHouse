@@ -1294,6 +1294,7 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
         }
 
         /// Hold element of process list till end of query execution.
+        // res.process_list_entry的销毁在 BlockIO析构的时候，即 BlockIO::~BlockIO -> void BlockIO::reset()
         res.process_list_entry = process_list_entry;
 
         auto & pipeline = res.pipeline;
@@ -1361,8 +1362,8 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
 
                 logQueryException(elem, context, start_watch, ast, query_span, internal, log_error);
             };
-
-            res.finish_callback = std::move(finish_callback);
+            // 注册这个BlockIO的finish_callback和exception_callback
+            res.finish_callback = std::move(finish_callback); // 在 void BlockIO::onFinish()中被调用
             res.exception_callback = std::move(exception_callback);
         }
     }
@@ -1382,7 +1383,9 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
     return std::make_tuple(std::move(ast), std::move(res));
 }
 
-
+/**
+ * 如果是TCPHandler，那么在 void TCPHandler::runImpl()中被调用
+ */
 std::pair<ASTPtr, BlockIO> executeQuery(
     const String & query,
     ContextMutablePtr context,

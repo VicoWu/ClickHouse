@@ -957,6 +957,7 @@ public:
     void makeSessionContext();
     void makeGlobalContext();
 
+    // 搜索 query_context->setProgressCallback([this] (const Progress & value) { this->updateProgress(value); });
     void setProgressCallback(ProgressCallback callback);
     /// Used in executeQuery() to pass it to the QueryPipeline.
     ProgressCallback getProgressCallback() const;

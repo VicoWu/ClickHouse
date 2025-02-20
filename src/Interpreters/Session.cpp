@@ -620,13 +620,19 @@ std::shared_ptr<SessionLog> Session::getSessionLog() const
     return global_context->getSessionLog();
 }
 
+/**
+ * 从session_context或者global_context来拷贝这个context作为这个query的context。优先是session_context，然后是global_context
+ * @param client_info_to_copy
+ * @param client_info_to_move
+ * @return
+ */
 ContextMutablePtr Session::makeQueryContextImpl(const ClientInfo * client_info_to_copy, ClientInfo * client_info_to_move) const
 {
     if (!user_id && getClientInfo().interface != ClientInfo::Interface::TCP_INTERSERVER)
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Query context must be created after authentication");
 
     /// We can create a query context either from a session context or from a global context.
-    bool from_session_context = static_cast<bool>(session_context);
+    bool from_session_context = static_cast<bool>(session_context); // 如果session_context不是一个空指针，那么from_session_context = true，否则为false
 
     /// Create a new query context.
     ContextMutablePtr query_context = Context::createCopy(from_session_context ? session_context : global_context);

@@ -44,7 +44,7 @@ private:
 
     std::mutex mutex;
     std::condition_variable condvar;
-    Container container;
+    Container container; // std::map<Priority, Count>;
 
 
     /** If there are higher priority queries - sleep until they are finish or timeout happens.
@@ -61,15 +61,19 @@ private:
 
         /// Is there at least one more priority query?
         bool found = false;
-        // std::map 按照键（在这里是 Priority）的升序排列，因此在遍历时，优先级较低（数字较小）的查询会先被访问
+
         for (const auto & value : container)
         {
+            /**
+             * 由于 container 是按优先级的值升序排列(即按照优先级从高到低排列)的（Priority 小表示高优先级），
+             * 所以一旦发现当前遍历的优先级(value.first)大于等于我们要执行的查询的优先级(priority)，我们就可以认为我们已经找到了优先级更高的查询（因为它们会排在前面，优先级小的值排前面）。
+             */
             if (value.first >= priority)
                 break; // 为什么发现一个priority值更大(优先级更小)的，就直接退出？
 
             if (value.second > 0) // 存在一个优先级的值更小(优先级更高)的正在Running的query
             {
-                found = true;
+                found = true; // 找到了一个更高优先级的Query
                 break;
             }
         }
@@ -82,6 +86,7 @@ private:
 
         /// Spurious wakeups are Ok. We allow to wait less than requested.
         // 在 condvar上面等待，直到收到通知，或者超时发生
+        // 如果发生超时，wait_for() 会返回，并且锁 mutex 会被重新获取，继续执行后续代码
         condvar.wait_for(lock, timeout);
     }
 
@@ -93,7 +98,7 @@ public:
         QueryPriorities::Container::value_type & value; // 这个优先级上的Query的统计信息
 
 
-        // 构造 , 在 Handle insert(Priority priority)中调用
+        // 构造 , 在 Handle insert(Priority priority) 中调用
     public:
         HandleImpl(QueryPriorities & parent_, QueryPriorities::Container::value_type & value_)
             : parent(parent_), value(value_) {}
@@ -104,6 +109,7 @@ public:
                 std::lock_guard lock(parent.mutex);
                 --value.second;
             }
+            // 注意，这里是notify_all
             parent.condvar.notify_all(); // 这个QueueStatus结束了，在condvar上执行通知，其它低优先级的Query会收到通知
         }
 
@@ -121,7 +127,7 @@ public:
     /** Register query with specified priority.
       * Returns an object that remove record in destructor.
       * QueryPriorities::insert
-      *
+      * 在 ProcessList::insert 中调用
       */
     Handle insert(Priority priority)
     {

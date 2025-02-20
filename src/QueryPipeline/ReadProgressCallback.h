@@ -24,7 +24,7 @@ class ReadProgressCallback
 public:
     void setQuota(const std::shared_ptr<const EnabledQuota> & quota_) { quota = quota_; }
     void setProcessListElement(QueryStatusPtr elem);
-    // 在方法std::unique_ptr<ReadProgressCallback> QueryPipeline::getReadProgressCallback() 中被调用
+    // 在方法 std::unique_ptr<ReadProgressCallback> QueryPipeline::getReadProgressCallback() 中被调用
     void setProgressCallback(const ProgressCallback & callback) { progress_callback = callback; }
     // 增加总的rows的近似值， 在static void executeJob中和void PipelineExecutor::finalizeExecution()中被调用
     void addTotalRowsApprox(size_t value) { total_rows_approx += value; }

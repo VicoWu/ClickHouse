@@ -570,6 +570,11 @@ Block QueryPipeline::getHeader() const
             "Header is available only for pushing or pulling QueryPipeline");
 }
 
+/**
+ * 搜索 pipeline.setProgressCallback, pipeline中的ProgressCallback是从对应的Context中设置的
+ * 随后，这个ProgressCallback 的function会被封装到ReadProgressCallback对象中去，ReadProgressCallback对象
+ * 会被交给PipelineExecutor去调用
+ */
 void QueryPipeline::setProgressCallback(const ProgressCallback & callback)
 {
     progress_callback = callback;
@@ -729,15 +734,16 @@ void QueryPipeline::convertStructureTo(const ColumnsWithTypeAndName & columns)
 
 /**
  * 构造一个 ReadProgressCallback 对象并返回，这个ReadProgressCallback对象将会设置到对应的PipelineExecutor中去
- * 搜 getReadProgressCallback()可以看到，getReadProgressCallback()返回的ReadProgressCallback对象通过方法
- * PipelineExecutor::setReadProgressCallback 设置到 PipelineExecutor 中
+ * 搜 getReadProgressCallback() 可以看到，getReadProgressCallback()返回的ReadProgressCallback对象通过方法
+ * PipelineExecutor::setReadProgressCallback 设置到 PipelineExecutor 中，
+ * 随后， read_progress_callback->addTotalRowsApprox 等方法会在指定时机被调用
  * @return
  */
 std::unique_ptr<ReadProgressCallback> QueryPipeline::getReadProgressCallback() const
 {
     // 构造一个ReadProgressCallback对象
     auto callback = std::make_unique<ReadProgressCallback>();
-    // 将progress_callback这个function设置到 ReadProgressCallback 对象中
+    // 将progress_callback这个function 设置到 ReadProgressCallback 对象中
     callback->setProgressCallback(progress_callback);
     callback->setQuota(quota);
     callback->setProcessListElement(process_list_element);

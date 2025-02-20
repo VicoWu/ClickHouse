@@ -894,6 +894,12 @@ ContextData::ContextData(const ContextData &o) :
 }
 
 Context::Context() = default;
+/**
+ * ContextData(rhs)： 这是类 Context 中的基类 ContextData 的拷贝构造函数调用。假设 Context 类继承自 ContextData 类，那么 ContextData(rhs) 会调用 ContextData 类的拷贝构造函数来初始化当前对象的基类部分。
+
+   std::enable_shared_from_this<Context>(rhs)： 这是调用 std::enable_shared_from_this 类模板的拷贝构造函数
+ * @param rhs
+ */
 Context::Context(const Context & rhs) : ContextData(rhs), std::enable_shared_from_this<Context>(rhs) {}
 
 SharedContextHolder::SharedContextHolder(SharedContextHolder &&) noexcept = default;

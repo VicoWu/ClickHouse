@@ -518,6 +518,7 @@ void TCPHandler::runImpl()
             });
 
             /// Processing Query
+            // 调用 std::pair<ASTPtr, BlockIO> executeQuery
             std::tie(state.parsed_query, state.io) = executeQuery(state.query, query_context, QueryFlags{}, state.stage);
 
             after_check_cancelled.restart();
@@ -528,7 +529,7 @@ void TCPHandler::runImpl()
                 if (state.cancellation_status == CancellationStatus::FULLY_CANCELLED)
                     state.io.onCancelOrConnectionLoss();
                 else
-                    state.io.onFinish();
+                    state.io.onFinish(); // 调用 BlockIO::onFinish
             };
 
             if (state.io.pipeline.pushing())
@@ -1894,7 +1895,8 @@ void TCPHandler::receiveQuery()
         throw exception; /// NOLINT
 #endif
     }
-
+    // using ContextMutablePtr = std::shared_ptr<Context>;
+    // 搜索 ContextMutablePtr Session::makeQueryContext(const ClientInfo & query_client_info) const
     query_context = session->makeQueryContext(client_info);
 
     /// Sets the default database if it wasn't set earlier for the session context.

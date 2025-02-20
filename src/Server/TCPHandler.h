@@ -200,7 +200,7 @@ private:
     Poco::Timespan sleep_after_receiving_query;
 
     std::unique_ptr<Session> session;
-    ContextMutablePtr query_context;
+    ContextMutablePtr query_context; // using ContextMutablePtr = std::shared_ptr<Context>;
     ClientInfo::QueryKind query_kind = ClientInfo::QueryKind::NO_QUERY;
 
     /// Streams for reading/writing from/to client connection socket.

@@ -9,6 +9,10 @@ namespace ErrorCodes
     extern const int QUERY_WAS_CANCELLED;
 }
 
+/**
+ * 在BlockIO的析构函数BlockIO::~BlockIO()被调用的时候会调用这个方法
+ * TCPHandler对executeQuery返回的BlockIO对象的生命周期的管理决定了BlockIO的析构函数什么时候被调用
+ */
 void BlockIO::reset()
 {
     /** process_list_entry should be destroyed after in, after out and after pipeline,
@@ -22,6 +26,9 @@ void BlockIO::reset()
     /// TODO simplify it all
 
     pipeline.reset();
+    // reset() 使 shared_ptr 不再指向当前对象。如果 shared_ptr 有多个实例指向同一对象，
+    // reset() 会减少该对象的引用计数，直到最后一个 shared_ptr 销毁对象。
+    // 参考 ProcessListEntry::~ProcessListEntry() 的销毁过程
     process_list_entry.reset();
 
     /// TODO Do we need also reset callbacks? In which order?
@@ -46,11 +53,18 @@ BlockIO & BlockIO::operator= (BlockIO && rhs) noexcept
     return *this;
 }
 
+/**
+ * BlockIO最后在 TCPHandler 中被管理，因此可以搜索 void TCPHandler::runImpl()，看到这个方法里通过调用
+ * executeQuery 返回的BlockIO对象,所以可以查看TCPHandler对executeQuery返回的BlockIO对象的生命周期的管理
+ */
 BlockIO::~BlockIO()
 {
-    reset();
+    reset(); // 完全销毁这个BlockIO
 }
 
+/**
+ * 搜索 auto finish_or_cancel = [this]() 查看调用位置
+ */
 void BlockIO::onFinish()
 {
     if (finish_callback)

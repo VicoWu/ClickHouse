@@ -154,6 +154,7 @@ protected:
 
     ProcessListForUser * user_process_list = nullptr;
 
+    // 这里是weak_ptr,因此，QueryStatus对这个ProcessListEntry的引用不会增加智能指针的引用计数的数量
     std::weak_ptr<ProcessListEntry> process_list_entry;
 
     OvercommitTracker * global_overcommit_tracker = nullptr;
@@ -326,8 +327,11 @@ private:
     Container::iterator it;
 
 public:
+    // 在 ProcessList::insert中构造了ProcessListEntry，封装了对应的ProcessList和QueryStatus所在的迭代器的指针
+    // 搜索 res = std::make_shared<Entry>(*this, process_it)查看构造 ProcessListEntry的过程
     ProcessListEntry(ProcessList & parent_, Container::iterator it_)
-        : parent(parent_), it(it_) {}
+        : parent(parent_), // 对应的ProcessList对象
+        it(it_) {} // 指向对应的QueryStatus的Iterator的指针
 
     ~ProcessListEntry();
 
@@ -355,7 +359,8 @@ protected:
 };
 
 
-/** List of currently executing queries.
+/** 在ContextSharedPart中构造，代表当前正在执行的Query
+ * List of currently executing queries.
   * Also implements limit on their number.
   */
 class ProcessList : public ProcessListBase
@@ -386,7 +391,7 @@ protected:
     mutable std::condition_variable have_space;        /// Number of currently running queries has become less than maximum.
 
     /// List of queries
-    Container processes;
+    Container processes; //  using Container = std::list<Element>;
     /// Notify about cancelled queries (done with ProcessListBase::mutex acquired).
     mutable std::condition_variable cancelled_cv;
 

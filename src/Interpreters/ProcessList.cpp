@@ -64,7 +64,9 @@ static bool isUnlimitedQuery(const IAST * ast)
     return false;
 }
 
-
+// 返回一个 std::shared_ptr<ProcessListEntry>
+// 搜索 context->getProcessList().insert 查看这个insert被调用的位置。
+// 一个ProcessList往往属于一个Context实例
 ProcessList::EntryPtr
 ProcessList::insert(const String & query_, const IAST * ast, ContextMutablePtr query_context, UInt64 watch_start_nanoseconds)
 {
@@ -268,11 +270,14 @@ ProcessList::insert(const String & query_, const IAST * ast, ContextMutablePtr q
                 watch_start_nanoseconds));
 
         increaseQueryKindAmount(query_kind);
-
+        // using Entry = ProcessListEntry
+        // 在析构函数 ProcessListEntry::~ProcessListEntry() 中，会将process_it从processes中删除
         res = std::make_shared<Entry>(*this, process_it);
 
-        (*process_it)->setUserProcessList(&user_process_list);
-        (*process_it)->setProcessListEntry(res);
+        (*process_it)->setUserProcessList(&user_process_list); // 在 QueryStatus 中设置指向当前用户的query list的引用
+
+        // 查看方法 setProcessListEntry， 是weak_ptr，因此,QueryStatus对象对ProcessListEntry的引用并不会阻碍ProcessListEntry的销毁
+        (*process_it)->setProcessListEntry(res); // QueryStatus::setProcessListEntry， 在QueryStatus中设置
 
         user_process_list.queries.emplace(client_info.current_query_id, res->getQueryStatus());
         queries_to_user.emplace(client_info.current_query_id, client_info.current_user);
@@ -299,7 +304,7 @@ ProcessList::insert(const String & query_, const IAST * ast, ContextMutablePtr q
     return res;
 }
 
-
+// 在 void BlockIO::reset()方法中被调用，即BlockIO被销毁的时候，会销毁这个Query对应的ProcessListEntry
 ProcessListEntry::~ProcessListEntry()
 {
     auto lock = parent.safeLock();
@@ -363,7 +368,7 @@ QueryStatus::QueryStatus(
     ContextPtr context_,
     const String & query_,
     const ClientInfo & client_info_,
-    QueryPriorities::Handle && priority_handle_,
+    QueryPriorities::Handle && priority_handle_, // std::shared_ptr<HandleImpl>
     ThreadGroupPtr && thread_group_,
     IAST::QueryKind query_kind_,
     const Settings & query_settings_,
@@ -499,7 +504,9 @@ void QueryStatus::setUserProcessList(ProcessListForUser * user_process_list_)
     user_process_list = user_process_list_;
 }
 
-
+/**
+ * 是 C++ 中的一种智能指针，用于与 std::shared_ptr 配合使用，但与 shared_ptr 不同，它不会增加引用计数，因此它不会影响对象的生命周期管理
+ */
 void QueryStatus::setProcessListEntry(std::weak_ptr<ProcessListEntry> process_list_entry_)
 {
     /// Synchronization is not required here because this function is only called from ProcessList::insert()
