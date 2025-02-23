@@ -993,6 +993,10 @@ bool InterpreterSelectQuery::adjustParallelReplicasAfterAnalysis()
     return false;
 }
 
+/**
+ * 调用者是 InterpreterSelectQuery::execute()
+ * @param query_plan
+ */
 void InterpreterSelectQuery::buildQueryPlan(QueryPlan & query_plan)
 {
     executeImpl(query_plan, std::move(input_pipe));
@@ -1022,9 +1026,9 @@ BlockIO InterpreterSelectQuery::execute()
 {
     BlockIO res;
     QueryPlan query_plan;
-
+    // 构建QueryPlan
     buildQueryPlan(query_plan);
-
+    // 基于构建的QueryPlan，构建QueryPipeline
     auto builder = query_plan.buildQueryPipeline(
         QueryPlanOptimizationSettings::fromContext(context), BuildQueryPipelineSettings::fromContext(context));
 

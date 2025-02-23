@@ -206,6 +206,7 @@ namespace ErrorCodes
 
 /** Set of known objects (environment), that could be used in query.
   * Shared (global) part. Order of members (especially, order of destruction) is very important.
+  * 一个全局唯一的对象，在Server启动的时候创建。搜索 Context::createShared()
   */
 struct ContextSharedPart : boost::noncopyable
 {
@@ -302,6 +303,8 @@ struct ContextSharedPart : boost::noncopyable
     mutable MMappedFileCachePtr mmap_cache TSA_GUARDED_BY(mutex);                     /// Cache of mmapped files to avoid frequent open/map/unmap/close and to reuse from several threads.
     AsynchronousMetrics * asynchronous_metrics TSA_GUARDED_BY(mutex) = nullptr;       /// Points to asynchronous metrics
     mutable PageCachePtr page_cache TSA_GUARDED_BY(mutex);                            /// Userspace page cache.
+    // 由于process_list是ContextSharedPart的成员变量，而ContextSharedPart在整个Server端只有一个，因此process_list是Server端共享的和唯一的，每一个Session的创建
+    // 不会创建和拷贝一个新的process_list出来
     ProcessList process_list;                                   /// Executing queries at the moment.
     SessionTracker session_tracker;
     GlobalOvercommitTracker global_overcommit_tracker;
@@ -833,9 +836,13 @@ ContextData::ContextData()
 {
     settings = std::make_unique<Settings>();
 }
+/**
+ * 比如，在从一个global_context复制出来一个Context用来构造一个SessionContext的时候会调用
+ */
+
 ContextData::ContextData(const ContextData &o) :
-    shared(o.shared),
-    client_info(o.client_info),
+    shared(o.shared), // 从这里可以看到，一个新的Session context通过shared指向global context
+    client_info(o.client_info), // client_info等等其他下面的信息是单独从global context中拷贝的
     external_tables_initializer_callback(o.external_tables_initializer_callback),
     input_initializer_callback(o.input_initializer_callback),
     input_blocks_reader(o.input_blocks_reader),
@@ -914,7 +921,7 @@ void SharedContextHolder::reset() { shared.reset(); }
 ContextMutablePtr Context::createGlobal(ContextSharedPart * shared_part)
 {
     auto res = std::shared_ptr<Context>(new Context);
-    res->shared = shared_part;
+    res->shared = shared_part; // Context的共享部分，一个ContextSharedPart。一个Server只有唯一一个shared_part对象
     res->query_access_info = std::make_shared<QueryAccessInfo>();
     res->query_privileges_info = std::make_shared<QueryPrivilegesInfo>();
     return res;
@@ -930,20 +937,27 @@ void Context::initGlobal()
 
 SharedContextHolder Context::createShared()
 {
+    // 调用ContextSharedPart的无参构造函数，构造ContextSharedPart的时候，会构造ProcessList
     return SharedContextHolder(std::make_unique<ContextSharedPart>());
 }
 
 ContextMutablePtr Context::createCopy(const ContextPtr & other)
 {
     SharedLockGuard lock(other->mutex);
+    /**
+     *      *other 是对 other 指针解引用。解引用指针就是获取指针指向的对象。
+     *      在这里，other 是一个指向 Context 类型对象的智能指针，*other 表示指向的 Context 对象。
+     *      搜索 Context::Context(const Context & rhs) 查看具体的构造函数实现
+     */
     auto new_context = std::shared_ptr<Context>(new Context(*other));
     return new_context;
 }
 
 ContextMutablePtr Context::createCopy(const ContextWeakPtr & other)
 {
+    // std::weak_ptr 本身不能直接访问其指向的对象，因此我们需要通过 lock() 方法将其转换为 std::shared_ptr。
     auto ptr = other.lock();
-    if (!ptr)
+    if (!ptr) // 指向的对象已经被销毁
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Can't copy an expired context");
     return createCopy(ptr);
 }
@@ -958,6 +972,14 @@ Context::~Context() = default;
 InterserverIOHandler & Context::getInterserverIOHandler() { return shared->interserver_io_handler; }
 const InterserverIOHandler & Context::getInterserverIOHandler() const { return shared->interserver_io_handler; }
 
+/**
+ * process_list对象属于一个ContextSharedPart
+ * 在从一个global_context构造出一个sessioin的context的时候，我们从 ContextData 的构造方法可以看到，一个ContextData
+ * 并没有自己独立的process_list，process_list只属于ContextSharedPart。而ContextSharedPart是在Server启动的时候创建的。
+ * 因此process_list并不是某一个session的，而是整个Server的。
+ *
+ * @return
+ */
 ProcessList & Context::getProcessList() { return shared->process_list; }
 const ProcessList & Context::getProcessList() const { return shared->process_list; }
 OvercommitTracker * Context::getGlobalOvercommitTracker() const { return &shared->global_overcommit_tracker; }
@@ -2693,7 +2715,7 @@ void Context::makeQueryContextForMutate(const MergeTreeSettings & merge_tree_set
 
 void Context::makeSessionContext()
 {
-    session_context = shared_from_this();
+    session_context = shared_from_this(); //
 }
 
 void Context::makeGlobalContext()

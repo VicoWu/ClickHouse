@@ -359,7 +359,7 @@ protected:
 };
 
 
-/** 在ContextSharedPart中构造，代表当前正在执行的Query
+/** 在 ContextSharedPart 中构造，代表当前正在执行的Query
  * List of currently executing queries.
   * Also implements limit on their number.
   */

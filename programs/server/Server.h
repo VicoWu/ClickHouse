@@ -31,6 +31,10 @@ namespace DB
 class AsynchronousMetrics;
 class ProtocolServerAdapter;
 
+/**
+ * mainEntryClickHouseServer中构造Server对象
+ * 继承关系 Server -> BaseDaemon -> Poco::Util::ServerApplication -> Application
+ */
 class Server : public BaseDaemon, public IServer
 {
 public:

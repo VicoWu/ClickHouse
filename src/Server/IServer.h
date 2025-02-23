@@ -18,6 +18,8 @@ class Logger;
 namespace DB
 {
 
+// 实现类是 Server
+// 搜索 class Server : public BaseDaemon, public IServer
 class IServer
 {
 public:

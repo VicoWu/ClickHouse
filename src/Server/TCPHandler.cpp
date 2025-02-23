@@ -1422,6 +1422,11 @@ std::string formatHTTPErrorResponseWhenUserIsConnectedToWrongPort(const Poco::Ut
 
 }
 
+/**
+ * 接收到TCP请求以后，创建一个Session。创建Session的时候，会先基于Gloabl Context。
+ * 可以看到，Global Context是调用的IServer.context，即服务器端共享的Context
+ * @return
+ */
 std::unique_ptr<Session> TCPHandler::makeSession()
 {
     auto interface = is_interserver_mode ? ClientInfo::Interface::TCP_INTERSERVER : ClientInfo::Interface::TCP;

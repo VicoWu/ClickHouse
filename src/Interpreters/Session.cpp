@@ -282,9 +282,16 @@ void Session::shutdownNamedSessions()
     NamedSessionsStorage::instance().shutdown();
 }
 
+/**
+ * 搜索  TCPHandler::makeSession()
+ * @param global_context_
+ * @param interface_
+ * @param is_secure
+ * @param certificate
+ */
 Session::Session(const ContextPtr & global_context_, ClientInfo::Interface interface_, bool is_secure, const std::string & certificate)
     : auth_id(UUIDHelpers::generateV4()),
-      global_context(global_context_),
+      global_context(global_context_), // Server级别的基础的Context
       log(getLogger(String{magic_enum::enum_name(interface_)} + "-Session"))
 {
     prepared_client_info.emplace();
@@ -496,6 +503,15 @@ OpenTelemetry::TracingContext & Session::getClientTraceContext()
     return prepared_client_info->client_trace_context;
 }
 
+/*
+ * 对于TCP连接模式下，
+搜索 if (!is_interserver_mode)
+session->makeSessionContext();
+
+ Session::makeSessionContext -> Context::makeSessionContext
+
+ Session的创建在TCPHandler::makeSession()方法中
+ */
 ContextMutablePtr Session::makeSessionContext()
 {
     if (session_context)
@@ -511,7 +527,9 @@ ContextMutablePtr Session::makeSessionContext()
             toString(auth_id), toString(*user_id));
     /// Make a new session context.
     ContextMutablePtr new_session_context;
+    // 先从GlobalContext中拷贝出基本数据
     new_session_context = Context::createCopy(global_context);
+    // 调用 Context::makeSessionContext，设置Context的成员变量session_context为一个shared_ptr类型的指针
     new_session_context->makeSessionContext();
 
     /// Copy prepared client info to the new session context.
@@ -522,6 +540,7 @@ ContextMutablePtr Session::makeSessionContext()
     new_session_context->setUser(*user_id);
 
     /// Session context is ready.
+    // 设置Session中的session_context
     session_context = new_session_context;
     user = session_context->getUser();
 

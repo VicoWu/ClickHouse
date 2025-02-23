@@ -79,11 +79,20 @@ public:
 
     /// Makes a session context, can be used one or zero times.
     /// The function also assigns an user to this context.
+    // 只有 非服务器间 模式的时候，才会创建session context。普通用户连接的时候，都会创建session context。但是服务器间通信的时候，不会
+    // 创建session context ,以简化逻辑
+    /**
+     * /// In interserver mode queries are executed without a session context.
+        if (!is_interserver_mode)
+            session->makeSessionContext();
+     * @return
+     */
     ContextMutablePtr makeSessionContext();
     ContextMutablePtr makeSessionContext(const String & session_name_, std::chrono::steady_clock::duration timeout_, bool session_check_);
     ContextMutablePtr sessionContext() { return session_context; }
     ContextPtr sessionContext() const { return session_context; }
-
+    // 优先使用sessin context，因为session context在创建的时候会首先设置为global context，然后再添加customized 配置。
+    // 没有session context(inter server connection)，则使用global context
     ContextPtr  sessionOrGlobalContext() const { return session_context ? session_context : global_context; }
 
     /// Makes a query context, can be used multiple times, with or without makeSession() called earlier.

@@ -158,14 +158,15 @@ QueryPipelineBuilderPtr QueryPlan::buildQueryPipeline(
     const BuildQueryPipelineSettings & build_pipeline_settings)
 {
     checkInitialized();
+    // 进行查询计划优化，使查询执行更高效
     optimize(optimization_settings);
 
     struct Frame
     {
         Node * node = {};
-        QueryPipelineBuilders pipelines = {};
+        QueryPipelineBuilders pipelines = {}; // using QueryPipelineBuilders = std::vector<QueryPipelineBuilderPtr>
     };
-
+    // using QueryPipelineBuilderPtr = std::unique_ptr<QueryPipelineBuilder>
     QueryPipelineBuilderPtr last_pipeline;
 
     std::stack<Frame> stack;

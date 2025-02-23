@@ -25,6 +25,7 @@ using ReadProgressCallbackPtr = std::unique_ptr<ReadProgressCallback>;
 
 
 /// Executes query pipeline.
+/// 在 QueryPipelineBuilder::execute() 中构造
 class PipelineExecutor
 {
 public:

@@ -13,6 +13,7 @@ class ProcessListEntry;
  * BlockIO 是 ClickHouse 中处理数据查询流的一个类，涉及查询的输入输出流（in, out）以及查询的执行过程和状态。
  * 它涉及多个重要的成员和方法，通常用于表示一个查询的执行状态、管道（pipeline）、和查询过程中相关的资源。
  * 它还负责在查询结束后清理资源，并提供必要的回调机制来处理查询的完成、异常和取消等事件。
+ * 在 InterpreterSelectQuery::execute()中，构造了一个BlockIO
  */
 struct BlockIO
 {

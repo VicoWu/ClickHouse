@@ -176,6 +176,13 @@ namespace ProfileEvents
 
 namespace fs = std::filesystem;
 
+/**
+ * 启动ClickHouse Server的入口
+ * Server::mainEntryClickHouseServer
+ * @param argc
+ * @param argv
+ * @return
+ */
 int mainEntryClickHouseServer(int argc, char ** argv)
 {
     DB::Server app;
@@ -369,13 +376,21 @@ void setOOMScore(int value, LoggerRawPtr log)
 }
 #endif
 
-
+/**
+ * 被Poco::Utils::Application所管理，在Server::run中被调用
+ */
 void Server::uninitialize()
 {
     logger().information("shutting down");
     BaseDaemon::uninitialize();
 }
 
+/**
+ * 调用链路  Server::mainEntryClickHouseServer -> Server::run -> Server::initialize
+ *                                                              Server::main
+ *                                                              Server::uninitialize
+ * @return
+ */
 int Server::run()
 {
     if (config().hasOption("help"))
@@ -393,9 +408,17 @@ int Server::run()
         std::cout << VERSION_NAME << " server version " << VERSION_STRING << VERSION_OFFICIAL << "." << std::endl;
         return 0;
     }
+    // 直接调用父类的虚函数run，搜索 virtual int run();
+    /**
+     * Application::run() 负责调用 initialize()、main() 和 uninitialize()，执行服务器的主要功能
+     * 所以，在这里，其实会执行Server::main方法
+     */
     return Application::run(); // NOLINT
 }
 
+/**
+ * 被Poco::Utils::Application所管理，在Server::run中被调用
+ */
 void Server::initialize(Poco::Util::Application & self)
 {
     ConfigProcessor::registerEmbeddedConfig("config.xml", std::string_view(reinterpret_cast<const char *>(gresource_embedded_xmlData), gresource_embedded_xmlSize));
@@ -699,6 +722,17 @@ static std::vector<String> getSanitizerNames()
 }
 #endif
 
+/**
+ * 被Poco::Utils::Application所管理，在Server::run中被调用
+ *
+ */
+
+/**
+ * 调用链路  Server::mainEntryClickHouseServer -> Server::run -> Server::initialize
+ *                                                              Server::main
+ *                                                              Server::uninitialize
+ * @return
+ */
 int Server::main(const std::vector<std::string> & /*args*/)
 try
 {
@@ -780,6 +814,8 @@ try
 
     /** Context contains all that query execution is dependent:
       *  settings, available functions, data types, aggregate functions, databases, ...
+      *  构造一个Server全局唯一 ContextSharedPart 对象，一些设置的信息，process_list, 可用的function，数据类型，聚合算子，数据库等等
+      *  返回一个封装了ContextSharedPart对象的SharedContextHolder对象
       */
     auto shared_context = Context::createShared();
     global_context = Context::createGlobal(shared_context.get());

@@ -193,7 +193,7 @@ void PipelineExecutor::setReadProgressCallback(ReadProgressCallbackPtr callback)
 }
 
 /**
- * 一个 PipelineExecutor管理了多个ExecutionThreadContext对象，负责整个graph
+ * 一个 PipelineExecutor管理了多个 ExecutionThreadContext 对象，负责整个graph
  */
 void PipelineExecutor::finalizeExecution()
 {
@@ -256,12 +256,14 @@ void PipelineExecutor::executeSingleThread(size_t thread_num)
 
 /**
  * 针对 编号为thread_num的线程，执行对应的step
- * PipelineExecutor::executeImpl  --| // 单线程
- * PipelineExecutor::spawnThreads() | // 多线程
- *                                 -> PipelineExecutor::executeSingleThread
- *                                        -> PipelineExecutor::executeStepImpl
- *                                             -> ExecutionThreadContext::executeTask()
- *                                                    -> ExecutionThreadContext::executeJob // 在这里会调用on_progress方法
+ * PipelineExecutor::executeImpl  --|
+ *    -> executeSingleThread()              // 单线程
+ *    -> PipelineExecutor::spawnThreads() | // 多线程
+ *          -> PipelineExecutor::executeSingleThread
+ *                 -> PipelineExecutor::executeStepImpl
+ *                      -> ExecutionThreadContext::executeTask()
+ *                             -> ExecutionThreadContext::executeJob // 在这里会调用on_progress方法
+ *                                -> ReadProgressCallback::onProgress
  * @param thread_num 当前的线程编号
  * @param yield_flag
  */

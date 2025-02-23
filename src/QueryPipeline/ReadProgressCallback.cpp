@@ -47,6 +47,16 @@ void ReadProgressCallback::setProcessListElement(QueryStatusPtr elem)
 /**
  * using StorageLimitsList = std::list<StorageLimits>
 
+ * 针对 编号为thread_num的线程，执行对应的step
+ * PipelineExecutor::executeImpl  --| // 单线程
+ * PipelineExecutor::spawnThreads() | // 多线程
+ *                                 -> PipelineExecutor::executeSingleThread
+ *                                        -> PipelineExecutor::executeStepImpl
+ *                                             -> ExecutionThreadContext::executeTask()
+ *                                                    -> ExecutionThreadContext::executeJob // 在这里会调用on_progress方法
+ *                                                       -> ReadProgressCallback::onProgress
+ * @param thread_num 当前的线程编号
+ * @param yield_flag
  */
 bool ReadProgressCallback::onProgress(uint64_t read_rows, uint64_t read_bytes, const StorageLimitsList & storage_limits)
 {
