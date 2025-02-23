@@ -97,6 +97,7 @@ void QueryPlan::unitePlans(QueryPlanStepPtr step, std::vector<std::unique_ptr<Qu
 
     for (auto & plan : plans)
     {
+        // 在所有的SubPlan中的max_threads中取最大值，作为自己的Plan的max_threads值
         max_threads = std::max(max_threads, plan->max_threads);
         resources = std::move(plan->resources);
     }
@@ -153,6 +154,9 @@ void QueryPlan::addStep(QueryPlanStepPtr step)
         isInitialized() ? 1 : 0);
 }
 
+/**
+ * 调用者是 BlockIO InterpreterSelectQuery::execute()
+ */
 QueryPipelineBuilderPtr QueryPlan::buildQueryPipeline(
     const QueryPlanOptimizationSettings & optimization_settings,
     const BuildQueryPipelineSettings & build_pipeline_settings)
@@ -161,46 +165,56 @@ QueryPipelineBuilderPtr QueryPlan::buildQueryPipeline(
     // 进行查询计划优化，使查询执行更高效
     optimize(optimization_settings);
 
+    // 存储当前遍历的查询计划节点以及其对应的 QueryPipelineBuilder 集合
+    // 构造了一个基于Frame的栈，实现对整个QueryPlan的深度优先遍历
     struct Frame
     {
         Node * node = {};
         QueryPipelineBuilders pipelines = {}; // using QueryPipelineBuilders = std::vector<QueryPipelineBuilderPtr>
     };
     // using QueryPipelineBuilderPtr = std::unique_ptr<QueryPipelineBuilder>
-    QueryPipelineBuilderPtr last_pipeline;
+    QueryPipelineBuilderPtr last_pipeline; // 用于存储上一次生成的 QueryPipelineBuilder。
 
-    std::stack<Frame> stack;
-    stack.push(Frame{.node = root});
+    std::stack<Frame> stack; // 深度优先遍历（DFS） 遍历查询计划的 Node 结构
+    stack.push(Frame{.node = root}); // 从查询计划的 root 开始遍历。
 
     while (!stack.empty())
     {
-        auto & frame = stack.top();
-
+        auto & frame = stack.top(); // 获取栈顶的元素(注意不是弹出来)
+        // last_Pipeline不为空，说明刚刚处理完了它的某一个子节点，因此把子节点的Pipeline添加到自己的pipeline中
         if (last_pipeline)
-        {
+        {   // 如果 last_pipeline 有值（上一次 Node 生成的 QueryPipelineBuilderPtr），则加入 frame.pipelines中
             frame.pipelines.emplace_back(std::move(last_pipeline));
             last_pipeline = nullptr;
         }
 
         size_t next_child = frame.pipelines.size();
+        // 如果这个frame下面的pipelines的大小刚好等于这个frame下面的子节点的大小，说明这个节点的所有子节点已经处理完成了
         if (next_child == frame.node->children.size())
-        {
+        {   // Node 的子节点已经全部遍历完毕，则处理当前 Node 本身，否则进入下一个子节点。
             bool limit_max_threads = frame.pipelines.empty();
+            // 根据不同的节点类型，step也有不同类型，都是 class IQueryPlanStep的实现类，updatePipeline方法是各个实现类的具体实现
+            // 比如 ISourceStep::updatePipeline, UnionStep::updatePipeline 等等
+            // 无论是那个Step，都最终会调用 QueryPipelineBuilder QueryPipelineBuilder::unitePipelines
+            // 来生成一个大的QueryPipelineBuilderPtr
             last_pipeline = frame.node->step->updatePipeline(std::move(frame.pipelines), build_pipeline_settings);
 
             if (limit_max_threads && max_threads)
                 last_pipeline->limitMaxThreads(max_threads);
 
-            stack.pop();
+            stack.pop(); // 这个节点和它的所有子节点处理完成，可以出栈丢弃了
         }
-        else
+        else // 将当前节点的子节点压入栈中
             stack.push(Frame{.node = frame.node->children[next_child]});
     }
-
+    // 深度遍历结束，在这里，last_pipeline对应了最上层的QueryPipeline
     last_pipeline->setProgressCallback(build_pipeline_settings.progress_callback);
+    // 从 build_pipeline_settings中获取QueryStatus，从调用者可以看到，
+    // build_pipeline_settings.process_list_element来自与传入的Context
+    // Context中的process_list_element是在executeQueryImpl方法中通过调用setProcessListElement来设置进去的
     last_pipeline->setProcessListElement(build_pipeline_settings.process_list_element);
     last_pipeline->addResources(std::move(resources));
-
+    // 当深度遍历结束以后，得到的这个last_pipeline，就是最上层的、对应root节点的、最大的QueryPipelineBuilder
     return last_pipeline;
 }
 

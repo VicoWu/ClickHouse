@@ -158,7 +158,10 @@ public:
     bool hasTotals() const { return pipe.getTotalsPort() != nullptr; }
 
     const Block & getHeader() const { return pipe.getHeader(); }
-
+    // 在方法 QueryPipelineBuilderPtr QueryPlan::buildQueryPipeline 的最后，
+    // 会设置整个Query的顶层的 QueryPipelineBuilder的QueryStatus
+    // 一个Session中的某一个Query的QueryStatus都会设置到Context中，
+    // 然后在执行 QueryPlan::buildQueryPipeline 的时候取出来放到顶层的这个QueryPipelineBuilder中
     void setProcessListElement(QueryStatusPtr elem);
     void setProgressCallback(ProgressCallback callback);
 
@@ -205,7 +208,7 @@ private:
 
     /// Destruction order: processors, header, locks, temporary storages, local contexts
     QueryPlanResourceHolder resources;
-    Pipe pipe;
+    Pipe pipe; // 当前的这个 QueryPipelineBuilder 如果是一个 非叶子 的 QueryPipelineBuilder，那么pipe就是所有子节点的Pipe的unite结果。
 
     /// Limit on the number of threads. Zero means no limit.
     /// Sometimes, more streams are created then the number of threads for more optimal execution.

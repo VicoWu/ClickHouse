@@ -27,7 +27,7 @@ struct BlockIO
     BlockIO & operator= (const BlockIO & rhs) = delete;
 
     std::shared_ptr<ProcessListEntry> process_list_entry;
-
+    // 在 InterpreterSelectQuery::execute()中被赋值，代表真个Query的QueryPipeline
     QueryPipeline pipeline;
 
     /// Callbacks for query logging could be set here.

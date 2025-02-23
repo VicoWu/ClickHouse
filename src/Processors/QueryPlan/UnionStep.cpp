@@ -57,6 +57,11 @@ void UnionStep::updateOutputStream()
     }
 }
 
+/**
+ *
+ * @param pipelines
+ * @return
+ */
 QueryPipelineBuilderPtr UnionStep::updatePipeline(QueryPipelineBuilders pipelines, const BuildQueryPipelineSettings &)
 {
     auto pipeline = std::make_unique<QueryPipelineBuilder>();

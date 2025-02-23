@@ -41,6 +41,9 @@ using RowPolicyPtr = std::shared_ptr<const RowPolicy>;
 
 
 /** Interprets the SELECT query. Returns the stream of blocks with the results of the query before `to_stage` stage.
+ *  对应的Interpreter是通过 registerInterpreterSelectQuery注册给 InterpreterFactory，即将创建对应的Intepreter的callback以某个名字注册给 InterpreterFactory
+ *  然后，在通过方法 static std::tuple<ASTPtr, BlockIO> executeQueryImpl 执行某个query的时候，会通过调用InterpreterFactory::instance().get()方法
+ *  来通过Intepretor的名字，调用所注册的callback方法，来获取对应的Intepretor对象
   */
 class InterpreterSelectQuery : public IInterpreterUnionOrSelectQuery
 {

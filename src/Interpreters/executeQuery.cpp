@@ -705,7 +705,16 @@ void validateAnalyzerSettings(ASTPtr ast, bool context_value)
         }
     }
 }
-
+/**
+ * TCPHandler::runImpl() -> executeQuery() -> executeQueryImpl()
+ * @param begin
+ * @param end
+ * @param context
+ * @param flags
+ * @param stage
+ * @param istr
+ * @return
+ */
 static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
     const char * begin,
     const char * end,
@@ -1161,7 +1170,7 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
                         throw;
                     }
                 }
-
+                // 获取对应的Intepretor的实现，这些实现是以注册的方式注册给 InterpreterFactory的
                 interpreter = InterpreterFactory::instance().get(ast, context, SelectQueryOptions(stage).setInternal(internal));
 
                 const auto & query_settings = context->getSettingsRef();
@@ -1385,6 +1394,11 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
 
 /**
  * 如果是TCPHandler，那么在 void TCPHandler::runImpl()中被调用
+ * void TCPHandler::runImpl()
+ *  -> executeQuery()
+ *      -> executeQueryImpl()
+ *          ->
+ *
  */
 std::pair<ASTPtr, BlockIO> executeQuery(
     const String & query,

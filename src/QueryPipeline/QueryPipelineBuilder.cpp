@@ -82,6 +82,10 @@ static void checkSource(const ProcessorPtr & source, bool can_have_totals)
             source->getOutputs().size());
 }
 
+/**
+ * 在 QueryPipelineBuilder::unitePipelines 中被调用
+ * @param pipe_
+ */
 void QueryPipelineBuilder::init(Pipe pipe_)
 {
     if (initialized())
@@ -265,6 +269,14 @@ void QueryPipelineBuilder::addExtremesTransform()
     pipe.addTransform(std::move(transform), nullptr, port);
 }
 
+/**
+ *  这是一个共用的静态工具类方法，供各种不同的IQueryPlanStep来根据自己的SubPlan的 QueryPipelineBuilder 综合成为一个大的 QueryPipelineBuilder
+    QueryPipelineBuilderPtr UnionStep::updatePipeline
+    AggregatingProjectionStep::updatePipeline
+    CreatingSetsStep::updatePipeline ....
+         -> QueryPipelineBuilder QueryPipelineBuilder::unitePipelines
+ * unitePipelines 方法用于合并多个 QueryPipelineBuilder，即将多个查询管道（QueryPipelineBuilder）整合成一个更大的管道。
+ */
 QueryPipelineBuilder QueryPipelineBuilder::unitePipelines(
     std::vector<std::unique_ptr<QueryPipelineBuilder>> pipelines,
     size_t max_threads_limit,
@@ -272,16 +284,17 @@ QueryPipelineBuilder QueryPipelineBuilder::unitePipelines(
 {
     if (pipelines.empty())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot unite an empty set of pipelines");
-
+    // 获取所有管道的公共 Header
+    // 取 pipelines 的第一个 QueryPipelineBuilder，获取其数据头（Block common_header）。
     Block common_header = pipelines.front()->getHeader();
 
     /// Should we limit the number of threads for united pipeline. True if all pipelines have max_threads != 0.
     /// If true, result max_threads will be sum(max_threads).
     /// Note: it may be > than settings.max_threads, so we should apply this limit again.
-    bool will_limit_max_threads = true;
+    bool will_limit_max_threads = true; // 是否需要限制最大线程数，初始为 true，如果 pipelines 里有 max_threads == 0，则变为 false。
     size_t max_threads = 0;
-    bool concurrency_control = false;
-    Pipes pipes;
+    bool concurrency_control = false; // 是否进行并发控制，默认false
+    Pipes pipes; // 存储 Pipeline 的 pipe，用于合并。
     QueryPlanResourceHolder resources;
 
     for (auto & pipeline_ptr : pipelines)
@@ -293,7 +306,7 @@ QueryPipelineBuilder QueryPipelineBuilder::unitePipelines(
 
         pipes.emplace_back(std::move(pipeline.pipe));
 
-        max_threads += pipeline.max_threads;
+        max_threads += pipeline.max_threads; // 子pipeline的max_threads相加
         will_limit_max_threads = will_limit_max_threads && pipeline.max_threads != 0;
 
         /// If one of pipelines uses more threads then current limit, will keep it.
@@ -302,8 +315,9 @@ QueryPipelineBuilder QueryPipelineBuilder::unitePipelines(
 
         concurrency_control = pipeline.getConcurrencyControl();
     }
-
+    // 生成新的 QueryPipelineBuilder
     QueryPipelineBuilder pipeline;
+    // 调用 Pipe::unitePipes,将子节点的Pipe综合成一个大的Pipe
     pipeline.init(Pipe::unitePipes(std::move(pipes), collected_processors, false));
     pipeline.addResources(std::move(resources));
 
@@ -639,7 +653,11 @@ void QueryPipelineBuilder::addPipelineBefore(QueryPipelineBuilder pipeline)
     OutputPort * extremes_out = has_extremes ? &*(out++) : nullptr;
     pipe.addTransform(std::move(processor), totals_in, extremes_in, totals_out, extremes_out);
 }
-
+/**
+ *  在方法 QueryPipelineBuilderPtr QueryPlan::buildQueryPipeline 的最后，
+ *  会设置整个Query的顶层的 QueryPipelineBuilder的QueryStatus
+ * @param elem
+ */
 void QueryPipelineBuilder::setProcessListElement(QueryStatusPtr elem)
 {
     process_list_element = elem;
@@ -664,12 +682,22 @@ Pipe QueryPipelineBuilder::getPipe(QueryPipelineBuilder pipeline, QueryPlanResou
     return std::move(pipeline.pipe);
 }
 
+/**
+ * 调用者是 BlockIO InterpreterSelectQuery::execute(),
+ * 传入的参数是整个计划树的顶层的QueryPipelineBuilder对象，
+ * 返回的QueryPipeline是整个Query的QueryPipeline
+ * @param builder
+ * @return
+ */
 QueryPipeline QueryPipelineBuilder::getPipeline(QueryPipelineBuilder builder)
 {
+    // 顶层的QueryPipelineBuilder的builder.pipe也是unite以后的pipe
     QueryPipeline res(std::move(builder.pipe));
     res.addResources(std::move(builder.resources));
     res.setNumThreads(builder.getNumThreads());
     res.setConcurrencyControl(builder.getConcurrencyControl());
+    // 在 QueryPipelineBuilderPtr QueryPlan::buildQueryPipeline 方法中，
+    // 会 通过方法 setProcessListElement 设置这个Query的顶层QueryPipelineBuilder的process_list_element
     res.setProcessListElement(builder.process_list_element);
     res.setProgressCallback(builder.progress_callback);
     return res;

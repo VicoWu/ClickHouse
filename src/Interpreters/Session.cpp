@@ -508,7 +508,10 @@ OpenTelemetry::TracingContext & Session::getClientTraceContext()
 搜索 if (!is_interserver_mode)
 session->makeSessionContext();
 
- Session::makeSessionContext -> Context::makeSessionContext
+ TCPHandler::runImpl()
+    -> Session::makeSessionContext
+        -> Context::makeSessionContext
+            -> Context::createCopy(global_context)
 
  Session的创建在TCPHandler::makeSession()方法中
  */

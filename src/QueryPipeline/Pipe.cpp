@@ -289,6 +289,7 @@ static Block getCommonHeader(const Pipes & pipes)
     return res;
 }
 
+// 在 QueryPipelineBuilder::unitePipelines中被调用
 Pipe Pipe::unitePipes(Pipes pipes)
 {
     return Pipe::unitePipes(std::move(pipes), nullptr, false);

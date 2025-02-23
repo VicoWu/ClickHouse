@@ -935,12 +935,20 @@ void Context::initGlobal()
     EventNotifier::init();
 }
 
+/**
+ * 在 Server::main 中 被调用
+ */
 SharedContextHolder Context::createShared()
 {
     // 调用ContextSharedPart的无参构造函数，构造ContextSharedPart的时候，会构造ProcessList
     return SharedContextHolder(std::make_unique<ContextSharedPart>());
 }
 
+/**
+ * 在  Session::makeSessionContext() 中被调用
+ * @param other
+ * @return
+ */
 ContextMutablePtr Context::createCopy(const ContextPtr & other)
 {
     SharedLockGuard lock(other->mutex);
@@ -2982,7 +2990,11 @@ ProgressCallback Context::getProgressCallback() const
     return progress_callback;
 }
 
-
+/**
+ * 把这个QueryStatus放到当前的Context中去。这是在  std::tuple<ASTPtr, BlockIO> executeQueryImpl( 中完成的。
+ * 放到Context中去的QueryStatus
+ * @param elem
+ */
 void Context::setProcessListElement(QueryStatusPtr elem)
 {
     /// Set to a session or query. In the session, only one query is processed at a time. Therefore, the lock is not needed.

@@ -1022,16 +1022,31 @@ void InterpreterSelectQuery::buildQueryPlan(QueryPlan & query_plan)
         query_plan.addStorageHolder(storage);
 }
 
+/**
+ * 在方法 static std::tuple<ASTPtr, BlockIO> executeQueryImpl( 中被调用
+ *
+ * void TCPHandler::runImpl()
+ *  -> executeQuery()
+ *      -> executeQueryImpl()
+ *          -> InterpreterSelectQuery::execute()
+*  Interpreter是通过 registerInterpreterSelectQuery注册给 InterpreterFactory，即将创建对应的Interpreter的callback以某个名字注册给 InterpreterFactory
+*  然后，在通过方法 static std::tuple<ASTPtr, BlockIO> executeQueryImpl 执行某个query的时候，会通过调用InterpreterFactory::instance().get()方法
+*  来通过Interpretor的名字，调用所注册的callback方法，来获取对应的Interpretor对象
+ * @return
+ */
 BlockIO InterpreterSelectQuery::execute()
 {
     BlockIO res;
     QueryPlan query_plan;
     // 构建QueryPlan
     buildQueryPlan(query_plan);
-    // 基于构建的QueryPlan，构建QueryPipeline
-    auto builder = query_plan.buildQueryPipeline(
+    // 基于构建的QueryPlan，构建 QueryPipelineBuilderPtr，
+    // 这里返回的QueryPipelineBuilderPtr，是整个QueryPlan最顶部的 QueryPipelineBuilderPtr
+    auto builder = query_plan.buildQueryPipeline(    // 搜索 QueryPlan::buildQueryPipeline
         QueryPlanOptimizationSettings::fromContext(context), BuildQueryPipelineSettings::fromContext(context));
-
+    /**
+     * 传入整个QueryPlan的顶层 QueryPipelineBuilderPtr，
+     */
     res.pipeline = QueryPipelineBuilder::getPipeline(std::move(*builder));
 
     setQuota(res.pipeline);

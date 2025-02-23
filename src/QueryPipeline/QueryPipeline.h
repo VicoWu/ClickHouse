@@ -36,12 +36,11 @@ class ReadProgressCallback;
 struct ColumnWithTypeAndName;
 using ColumnsWithTypeAndName = std::vector<ColumnWithTypeAndName>;
 
-
 class QueryPipeline
 {
 public:
     QueryPipeline();
-    QueryPipeline(QueryPipeline &&) noexcept;
+    QueryPipeline(QueryPipeline &&) noexcept; //  在 QueryPipelineBuilder::getPipeline 中构造，
     QueryPipeline(const QueryPipeline &) = delete;
 
     QueryPipeline & operator=(QueryPipeline &&) noexcept;
