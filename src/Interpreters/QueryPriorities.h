@@ -78,7 +78,7 @@ private:
                 LOG_INFO(&Poco::Logger::get("QueryPriorities"),
                          " Found {} queries with higher priority {} "
                          "than current priority {}. Will sleep",
-                         value.second, value.first, priority)
+                         value.second, value.first, priority);
                 found = true;
                 break;
             }
