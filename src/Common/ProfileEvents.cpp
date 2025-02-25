@@ -520,7 +520,8 @@ The server successfully detected this situation and will download merged part fr
     M(LogInfo, "Number of log messages with level Info") \
     M(LogWarning, "Number of log messages with level Warning") \
     M(LogError, "Number of log messages with level Error") \
-    M(LogFatal, "Number of log messages with level Fatal") \
+    M(LogFatal, "Number of log messages with level Fatal")                                                                                                                                                                                                                                                                           \
+    M(JobPreempted, "Number of jobs preempted.") \
 
 
 namespace ProfileEvents

@@ -6,11 +6,21 @@
 #include <memory>
 #include <chrono>
 #include <Common/CurrentMetrics.h>
+#include <Common/logger_useful.h>
+#include <boost/stacktrace.hpp>
+#include <Common/ProfileEvents.h>
 
 namespace CurrentMetrics
 {
     extern const Metric QueryPreempted;
 }
+
+
+namespace ProfileEvents
+{
+extern const Event JobPreempted;
+}
+
 
 
 namespace DB
@@ -65,6 +75,10 @@ private:
 
             if (value.second > 0)
             {
+                LOG_INFO(&Poco::Logger::get("QueryPriorities"),
+                         " Found {} queries with higher priority {} "
+                         "than current priority {}. Will sleep",
+                         value.second, value.first, priority)
                 found = true;
                 break;
             }
@@ -72,11 +86,17 @@ private:
 
         if (!found)
             return;
+        std::string stacktrace_str = boost::stacktrace::to_string(boost::stacktrace::stacktrace());
+        LOG_INFO(&Poco::Logger::get("QueryPriorities"),
+                 " Will sleep 1 seconds for priority. Current stack {}",
+                  stacktrace_str);
 
         CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryPreempted};
-
+        ProfileEvents::increment(ProfileEvents::JobPreempted);
         /// Spurious wakeups are Ok. We allow to wait less than requested.
         condvar.wait_for(lock, timeout);
+        LOG_INFO(&Poco::Logger::get("QueryPriorities"),
+                 " Sleep done");
     }
 
 public:
