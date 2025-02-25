@@ -61,15 +61,16 @@ private:
 
         /// Is there at least one more priority query?
         bool found = false;
-
+        // 遍历，只要找到一个优先级更高(值更小)就退出循环然后sleep
         for (const auto & value : container)
         {
             /**
              * 由于 container 是按优先级的值升序排列(即按照优先级从高到低排列)的（Priority 小表示高优先级），
-             * 所以一旦发现当前遍历的优先级(value.first)大于等于我们要执行的查询的优先级(priority)，我们就可以认为我们已经找到了优先级更高的查询（因为它们会排在前面，优先级小的值排前面）。
+             * 所以一旦发现当前遍历的优先级(value.first)大于等于我们要执行的查询的优先级(priority)，
+             * 我们就可以认为我们已经找到了优先级更高的查询（因为它们会排在前面，优先级小的值排前面）。
              */
             if (value.first >= priority)
-                break; // 为什么发现一个priority值更大(优先级更小)的，就直接退出？
+                break;
 
             if (value.second > 0) // 存在一个优先级的值更小(优先级更高)的正在Running的query
             {
@@ -82,6 +83,7 @@ private:
             return;
 
         // 找到了，抢占的metrics 加 1
+        // 注意，这个metrics是一个Gauge，当生命周期结束的时候，由于对象metric_increment的销毁，就会减去1
         CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryPreempted};
 
         /// Spurious wakeups are Ok. We allow to wait less than requested.
@@ -132,7 +134,7 @@ public:
     Handle insert(Priority priority)
     {
         if (0 == priority)
-            return {};
+            return {}; // 从这里可以看到，如果Query本身的priority是0，根本不会放到container中，这意味着，一个query的priority是0，既不会受影响，也不会影响别人
 
         std::lock_guard lock(mutex);
         // emplace方法在不存在 priority 的时候插入成功，在priority已经存在的时候插入失败
