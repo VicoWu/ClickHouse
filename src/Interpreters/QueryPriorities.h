@@ -135,7 +135,7 @@ public:
         std::string stacktrace_str = boost::stacktrace::to_string(boost::stacktrace::stacktrace());
         LOG_INFO(&Poco::Logger::get("QueryPriorities"),
                  " Added a new priority with value {}. Current stack {}",
-                 priority
+                 priority,
                  stacktrace_str);
         if (0 == priority)
             return {};
