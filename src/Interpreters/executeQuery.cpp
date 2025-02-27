@@ -975,6 +975,7 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
         /// Put query to process list. But don't put SHOW PROCESSLIST query itself.
         if (!internal && !ast->as<ASTShowProcesslistQuery>())
         {
+            /// 创建对应的QueryStatus,并插入到 context->getProcessList()中去
             /// processlist also has query masked now, to avoid secrets leaks though SHOW PROCESSLIST by other users.
             process_list_entry = context->getProcessList().insert(query_for_logging, ast.get(), context, start_watch.getStart());
             context->setProcessListElement(process_list_entry->getQueryStatus());
