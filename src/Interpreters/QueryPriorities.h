@@ -87,7 +87,7 @@ private:
         std::string stacktrace_str = boost::stacktrace::to_string(boost::stacktrace::stacktrace());
         LOG_INFO(&Poco::Logger::get("QueryPriorities"),
                  " Will sleep 1 seconds for priority. Current stack {}",
-                 stack_trace.toString());
+                 stack_trace->toString());
         CurrentMetrics::Increment metric_increment{CurrentMetrics::QueryPreempted};
         ProfileEvents::increment(ProfileEvents::JobPreempted);
         /// Spurious wakeups are Ok. We allow to wait less than requested.
@@ -117,7 +117,7 @@ public:
             std::string stacktrace_str = boost::stacktrace::to_string(boost::stacktrace::stacktrace());
             LOG_INFO(&Poco::Logger::get("QueryPriorities"),
                      " HandleImpl is deconstructed. Current stack {}",
-                     stack_trace.toString());
+                     stack_trace->toString());
             parent.condvar.notify_all();
         }
 
