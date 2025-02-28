@@ -1,4 +1,3 @@
-add_definitions(-DBOOST_STACKTRACE_USE_ADDR2LINE)
 set (LIBRARY_DIR "${ClickHouse_SOURCE_DIR}/contrib/boost")
 
 # filesystem
