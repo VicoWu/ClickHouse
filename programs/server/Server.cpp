@@ -820,7 +820,7 @@ try
     auto shared_context = Context::createShared();
     global_context = Context::createGlobal(shared_context.get());
 
-    global_context->makeGlobalContext();
+    global_context->makeGlobalContext(); // 创建一个特殊的 Context，全局共享，它的global_context成员是指向自己的，因为自己就是那个Global Context
     global_context->setApplicationType(Context::ApplicationType::SERVER);
 
 #if !defined(NDEBUG) || !defined(__OPTIMIZE__)

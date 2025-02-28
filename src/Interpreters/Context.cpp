@@ -837,6 +837,7 @@ ContextData::ContextData()
     settings = std::make_unique<Settings>();
 }
 /**
+ * ContextData的自定义的拷贝构造函数
  * 比如，在从一个global_context复制出来一个Context用来构造一个SessionContext的时候会调用
  */
 
@@ -954,7 +955,8 @@ ContextMutablePtr Context::createCopy(const ContextPtr & other)
     SharedLockGuard lock(other->mutex);
     /**
      *      *other 是对 other 指针解引用。解引用指针就是获取指针指向的对象。
-     *      在这里，other 是一个指向 Context 类型对象的智能指针，*other 表示指向的 Context 对象。
+     *      在这里，other 是一个指向 Context 类型对象的智能指针，解引用智能指针 *other 表示这个只能指针指向的 Context 对象。
+     *      最后，基于创建的Context指针，创建一个std::shared_ptr指针(注意，不是std_make_shared)
      *      搜索 Context::Context(const Context & rhs) 查看具体的构造函数实现
      */
     auto new_context = std::shared_ptr<Context>(new Context(*other));

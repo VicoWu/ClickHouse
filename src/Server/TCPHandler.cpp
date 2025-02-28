@@ -1781,7 +1781,7 @@ void TCPHandler::receiveQuery()
     /// so it is better to reset session to avoid using old user.
     if (is_interserver_mode)
     {
-        session = makeSession();
+        session = makeSession(); // 如果是服务器间的持续通信，那么，会为每一个query建立session，但是如果是用户发起的请求，那么是在receiveHello中创建session，即第一次连接建立的时候创建session
     }
 
     /// Read client info.
