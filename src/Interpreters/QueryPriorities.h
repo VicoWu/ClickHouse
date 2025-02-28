@@ -9,6 +9,7 @@
 #include <Common/logger_useful.h>
 #include <boost/stacktrace.hpp>
 #include <Common/ProfileEvents.h>
+#include <Common/StackTrace.h>
 
 namespace CurrentMetrics
 {
@@ -132,11 +133,12 @@ public:
       */
     Handle insert(Priority priority)
     {
+        std::shared_ptr stack_trace = std::make_shared<StackTrace>();
         std::string stacktrace_str = boost::stacktrace::to_string(boost::stacktrace::stacktrace());
         LOG_INFO(&Poco::Logger::get("QueryPriorities"),
                  " Added a new priority with value {}. Current stack {}",
                  priority,
-                 stacktrace_str);
+                 stack_trace->toString());
         if (0 == priority)
             return {};
 
