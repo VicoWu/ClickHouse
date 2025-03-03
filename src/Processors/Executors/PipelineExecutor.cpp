@@ -40,7 +40,7 @@ PipelineExecutor::PipelineExecutor(std::shared_ptr<Processors> & processors, Que
     : process_list_element(std::move(elem))
 {
     std::shared_ptr stack_trace = std::make_shared<StackTrace>();
-    LOG_INFO(log, "Constructing PipelineExecutor {}", stack_trace.toString())
+    LOG_INFO(log, "Constructing PipelineExecutor {}", stack_trace.toString());
     if (process_list_element)
     {
         profile_processors = process_list_element->getContext()->getSettingsRef().log_processors_profiles;
