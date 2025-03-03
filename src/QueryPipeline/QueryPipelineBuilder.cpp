@@ -668,6 +668,10 @@ void QueryPipelineBuilder::setProgressCallback(ProgressCallback callback)
     progress_callback = callback;
 }
 
+/**
+ * 这个方法没有看到调用的地方
+ * @return
+ */
 PipelineExecutorPtr QueryPipelineBuilder::execute()
 {
     if (!isCompleted())
@@ -683,7 +687,13 @@ Pipe QueryPipelineBuilder::getPipe(QueryPipelineBuilder pipeline, QueryPlanResou
 }
 
 /**
- * 调用者是 BlockIO InterpreterSelectQuery::execute(),
+ * 调用者是
+ * Poco::Net::TCPServerConnection::start()
+ *   ->  DB::TCPHandler::run()
+ *      -> DB::TCPHandler::runImpl()
+ *          -> executeQuery.cpp:1395: DB::executeQuery(
+ *               -> executeQuery.cpp:0: DB::executeQueryImpl(
+ *                   ->  BlockIO InterpreterSelectQuery::execute()
  * 传入的参数是整个计划树的顶层的QueryPipelineBuilder对象，
  * 返回的QueryPipeline是整个Query的QueryPipeline
  * @param builder

@@ -1235,7 +1235,8 @@ static std::tuple<ASTPtr, BlockIO> executeQueryImpl(
                         String class_name(demangle(typeid(*raw_interpreter_ptr).name()));
                         span = std::make_unique<OpenTelemetry::SpanHolder>(class_name + "::execute()");
                     }
-
+                    // 这里根据Interpreters的类型调用对应的execute方法，
+                    // 比如DB::InterpreterSelectWithUnionQuery::execute()方法
                     res = interpreter->execute();
 
                     /// If it is a non-internal SELECT query, and active (write) use of the query cache is enabled, then add a processor on
