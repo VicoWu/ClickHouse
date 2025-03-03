@@ -31,6 +31,8 @@
 #include <Common/CurrentThread.h>
 #include <Common/iota.h>
 #include <Common/typeid_cast.h>
+#include <Common/logger_useful.h>
+#include <Common/StackTrace.h>
 
 namespace DB
 {
@@ -652,6 +654,10 @@ void QueryPipelineBuilder::setProgressCallback(ProgressCallback callback)
 
 PipelineExecutorPtr QueryPipelineBuilder::execute()
 {
+    std::shared_ptr stack_trace = std::make_shared<StackTrace>();
+    LOG_INFO(&Poco::Logger::get("QueryPipelineBuilder"),"Executing "
+                                                         "QueryPipelineBuilder::execute, "
+                                                         "stack is {} ", stack_trace.toString());
     if (!isCompleted())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot execute pipeline because it is not completed");
 
