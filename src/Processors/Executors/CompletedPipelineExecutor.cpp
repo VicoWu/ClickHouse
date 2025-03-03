@@ -88,7 +88,7 @@ void CompletedPipelineExecutor::execute()
         {
             threadFunction(*data_ptr, thread_group, num_threads, concurrency_control);
         };
-
+        // 这里会直接执行threadFunction定义的回调，参考 class ThreadFromGlobalPoolImpl : boost::noncopyable
         data->thread = ThreadFromGlobalPool(std::move(func));
 
         while (!data->is_finished)

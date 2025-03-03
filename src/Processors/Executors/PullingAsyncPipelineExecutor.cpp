@@ -87,7 +87,7 @@ static void threadFunction(
     {
         if (thread_group)
             CurrentThread::attachToGroup(thread_group);
-
+        // 调用对应的 PipelineExecutor::execute
         data.executor->execute(num_threads, concurrency_control);
     }
     catch (...)
@@ -108,6 +108,7 @@ bool PullingAsyncPipelineExecutor::pull(Chunk & chunk, uint64_t milliseconds)
     if (!data)
     {
         data = std::make_unique<Data>();
+        // 构造一个PipelineExecutor对象
         data->executor = std::make_shared<PipelineExecutor>(pipeline.processors, pipeline.process_list_element);
         data->executor->setReadProgressCallback(pipeline.getReadProgressCallback());
         data->lazy_format = lazy_format.get();
@@ -116,7 +117,7 @@ bool PullingAsyncPipelineExecutor::pull(Chunk & chunk, uint64_t milliseconds)
         {
             threadFunction(*data, thread_group, pipeline.getNumThreads(), pipeline.getConcurrencyControl());
         };
-
+        // 这里会直接执行threadFunction定义的回调，参考 class ThreadFromGlobalPoolImpl : boost::noncopyable
         data->thread = ThreadFromGlobalPool(std::move(func));
     }
 
