@@ -672,6 +672,10 @@ Pipe QueryPipelineBuilder::getPipe(QueryPipelineBuilder pipeline, QueryPlanResou
 
 QueryPipeline QueryPipelineBuilder::getPipeline(QueryPipelineBuilder builder)
 {
+    std::shared_ptr stack_trace = std::make_shared<StackTrace>();
+    LOG_INFO(&Poco::Logger::get("QueryPipelineBuilder"),"Trying to get pipeline from  "
+                                                         "QueryPipelineBuilder, "
+                                                         "stack is {} ", stack_trace->toString());
     QueryPipeline res(std::move(builder.pipe));
     res.addResources(std::move(builder.resources));
     res.setNumThreads(builder.getNumThreads());
