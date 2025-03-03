@@ -1045,7 +1045,7 @@ BlockIO InterpreterSelectQuery::execute()
     auto builder = query_plan.buildQueryPipeline(    // 搜索 QueryPlan::buildQueryPipeline
         QueryPlanOptimizationSettings::fromContext(context), BuildQueryPipelineSettings::fromContext(context));
     /**
-     * 传入整个QueryPlan的顶层 QueryPipelineBuilderPtr，
+     * 传入整个QueryPlan的顶层 QueryPipelineBuilderPtr
      */
     res.pipeline = QueryPipelineBuilder::getPipeline(std::move(*builder));
 

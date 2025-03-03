@@ -66,6 +66,14 @@ const Block & PullingAsyncPipelineExecutor::getHeader() const
     return lazy_format->getPort(IOutputFormat::PortKind::Main).getHeader();
 }
 
+/**
+ * 异步执行
+ * 在 PullingAsyncPipelineExecutor::pull中被调用
+ * @param data
+ * @param thread_group
+ * @param num_threads
+ * @param concurrency_control
+ */
 static void threadFunction(
     PullingAsyncPipelineExecutor::Data & data, ThreadGroupPtr thread_group, size_t num_threads, bool concurrency_control)
 {

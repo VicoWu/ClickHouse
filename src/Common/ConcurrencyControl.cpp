@@ -93,6 +93,14 @@ ConcurrencyControl::~ConcurrencyControl()
         abort();
 }
 
+/**
+ * 在 void PipelineExecutor::initializeExecution 里面调用
+ * 当我们enable了ConcurrencyControl的时候,min = 1
+ * 在 res.setConcurrencyControl(builder.getConcurrencyControl()) 中奖ConcurrencyControl设置到了Pipeline中
+ * @param min
+ * @param max
+ * @return
+ */
 [[nodiscard]] SlotAllocationPtr ConcurrencyControl::allocate(SlotCount min, SlotCount max)
 {
     if (min > max)

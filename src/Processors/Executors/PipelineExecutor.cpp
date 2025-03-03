@@ -98,6 +98,15 @@ void PipelineExecutor::finish()
     tasks.finish();
 }
 
+/**
+ * 这是多线程情况下的执行
+ * 搜索 PipelineExecutorPtr executor， 可以看到 PipelineExecutorPtr executor被封装在了CompletedPipelineExecutor，PullingPipelineExecutor,PullingAsyncPipelineExecutor
+ * PushingPipelineExecutor,PushingAsyncPipelineExecutor中
+ * 也可以搜搜 data.executor->execute， 这是多线程情况下的执行
+ * 也可以搜搜 executor->executeStep，这是单线程情况下的执行
+ * @param num_threads
+ * @param concurrency_control
+ */
 void PipelineExecutor::execute(size_t num_threads, bool concurrency_control)
 {
     checkTimeLimit();
@@ -131,6 +140,15 @@ void PipelineExecutor::execute(size_t num_threads, bool concurrency_control)
     finalizeExecution();
 }
 
+/**
+ * 这是单线程情况下的执行
+* 搜索 PipelineExecutorPtr executor， 可以看到 PipelineExecutorPtr executor被封装在了CompletedPipelineExecutor，PullingPipelineExecutor,PullingAsyncPipelineExecutor
+* PushingPipelineExecutor,PushingAsyncPipelineExecutor中
+* 也可以搜搜 data.executor->execute， 这是多线程情况下的执行
+* 也可以搜搜 executor->executeStep，这是单线程情况下的执行
+ * @param yield_flag
+ * @return
+ */
 bool PipelineExecutor::executeStep(std::atomic_bool * yield_flag)
 {
     if (!is_execution_initialized)
@@ -402,6 +420,11 @@ void PipelineExecutor::spawnThreads()
     }
 }
 
+/**
+ * 在 void PipelineExecutor::execute中被调用
+ * @param num_threads
+ * @param concurrency_control
+ */
 void PipelineExecutor::executeImpl(size_t num_threads, bool concurrency_control)
 {
     initializeExecution(num_threads, concurrency_control);
