@@ -40,7 +40,7 @@ PipelineExecutor::PipelineExecutor(std::shared_ptr<Processors> & processors, Que
     : process_list_element(std::move(elem))
 {
     std::shared_ptr stack_trace = std::make_shared<StackTrace>();
-    LOG_INFO(log, "Constructing PipelineExecutor {}", stack_trace.toString());
+    LOG_INFO(log, "Constructing PipelineExecutor {}", stack_trace->toString());
     if (process_list_element)
     {
         profile_processors = process_list_element->getContext()->getSettingsRef().log_processors_profiles;
@@ -106,7 +106,7 @@ void PipelineExecutor::execute(size_t num_threads, bool concurrency_control)
     std::shared_ptr stack_trace = std::make_shared<StackTrace>();
     checkTimeLimit();
     num_threads = std::max<size_t>(num_threads, 1);
-    LOG_INFO(log, "Running PipelineExecutor::execute with stack {}", stack_trace.toString());
+    LOG_INFO(log, "Running PipelineExecutor::execute with stack {}", stack_trace->toString());
     OpenTelemetry::SpanHolder span("PipelineExecutor::execute()");
     span.addAttribute("clickhouse.thread_num", num_threads);
 

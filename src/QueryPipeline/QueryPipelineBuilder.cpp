@@ -657,7 +657,7 @@ PipelineExecutorPtr QueryPipelineBuilder::execute()
     std::shared_ptr stack_trace = std::make_shared<StackTrace>();
     LOG_INFO(&Poco::Logger::get("QueryPipelineBuilder"),"Executing "
                                                          "QueryPipelineBuilder::execute, "
-                                                         "stack is {} ", stack_trace.toString());
+                                                         "stack is {} ", stack_trace->toString());
     if (!isCompleted())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot execute pipeline because it is not completed");
 
