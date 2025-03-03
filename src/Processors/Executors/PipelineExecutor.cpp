@@ -34,7 +34,16 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
 }
 
-
+/**
+ * PipelineExecutor的构造过程
+ * DB::TCPHandler::runImpl()
+ *   -> DB::TCPHandler::processOrdinaryQuery()
+ *      -> DB::PullingAsyncPipelineExecutor::pull(DB::Block&, unsigned long)
+ *         -> DB::PullingAsyncPipelineExecutor::pull(DB::Chunk&, unsigned long)
+ *           -> DB::PipelineExecutor::PipelineExecutor
+ * @param processors
+ * @param elem
+ */
 PipelineExecutor::PipelineExecutor(std::shared_ptr<Processors> & processors, QueryStatusPtr elem)
     : process_list_element(std::move(elem))
 {
