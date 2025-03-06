@@ -60,7 +60,7 @@ public:
     void tryWakeUpAnyOtherThreadWithTasks(ExecutionThreadContext & self, std::unique_lock<std::mutex> & lock);
     void tryGetTask(ExecutionThreadContext & context);
     void pushTasks(Queue & queue, Queue & async_queue, ExecutionThreadContext & context);
-    // 在 PipelineExecutor::initializeExecution中被调用
+    // 在 PipelineExecutor::initializeExecution 中被调用
     void init(size_t num_threads_, size_t use_threads_, bool profile_processors, bool trace_processors, ReadProgressCallback * callback);
     void fill(Queue & queue);
     void upscale(size_t use_threads_);

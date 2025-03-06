@@ -66,7 +66,7 @@ public:
 
 private:
     ExecutingGraphPtr graph;
-
+    // 这个并不是一个Task，而是一个task的管理器, 这里可以看到，在PipelineExecutor构造的时候会构造一个ExecutorTasks对象，ExecutorTasks对象与PipelineExecutor一一对应
     ExecutorTasks tasks;
 
     /// Concurrency control related

@@ -68,7 +68,7 @@ const Block & PullingAsyncPipelineExecutor::getHeader() const
 
 /**
  * 异步执行
- * 在 PullingAsyncPipelineExecutor::pull中被调用
+ * 在 PullingAsyncPipelineExecutor::pull 中被调用
  * @param data
  * @param thread_group
  * @param num_threads
@@ -115,6 +115,7 @@ bool PullingAsyncPipelineExecutor::pull(Chunk & chunk, uint64_t milliseconds)
 
         auto func = [&, thread_group = CurrentThread::getGroup()]()
         {
+            // 在这里会调用PipelineExecutor的execute方法。可以看到，numThreads和是否enable了ConcurrencyControl是从构造好的Pipeline中设置进去的
             threadFunction(*data, thread_group, pipeline.getNumThreads(), pipeline.getConcurrencyControl());
         };
         // 这里会直接执行threadFunction定义的回调，参考 class ThreadFromGlobalPoolImpl : boost::noncopyable

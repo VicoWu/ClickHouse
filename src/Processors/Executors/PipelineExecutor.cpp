@@ -372,6 +372,11 @@ void PipelineExecutor::executeStepImpl(size_t thread_num, std::atomic_bool * yie
 #endif
 }
 
+/**
+ * 在 PipelineExecutor::executeImpl 中被调用
+ * @param num_threads
+ * @param concurrency_control
+ */
 void PipelineExecutor::initializeExecution(size_t num_threads, bool concurrency_control)
 {
     is_execution_initialized = true;
@@ -395,6 +400,7 @@ void PipelineExecutor::initializeExecution(size_t num_threads, bool concurrency_
 
 void PipelineExecutor::spawnThreads()
 {
+    // 如果ConcurrencyControl中的线程不够，这时候spawnThreads至少能拿到一个线程，不至于无法执行
     while (auto slot = cpu_slots->tryAcquire())
     {
         size_t thread_num = threads.fetch_add(1);
@@ -430,7 +436,7 @@ void PipelineExecutor::spawnThreads()
 }
 
 /**
- * 在 void PipelineExecutor::execute中被调用
+ * 在 void PipelineExecutor::execute 中被调用
  * @param num_threads
  * @param concurrency_control
  */
