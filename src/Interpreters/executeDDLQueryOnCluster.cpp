@@ -412,6 +412,11 @@ Chunk DDLQueryStatusSource::generate()
                                                 "they are going to execute the query in background";
             if (throw_on_timeout)
             {
+                /**
+                 * Code: 159. DB::Exception: Received from localhost:9000. DB::Exception: Watching task /clickhouse/task_queue/ddl/query-0000000207
+                 * is executing longer than distributed_ddl_task_timeout (=180) seconds.
+                 * There are 2 unfinished hosts (0 of them are currently active), they are going to execute the query in background. (TIMEOUT_EXCEEDED)
+                 */
                 if (!first_exception)
                     first_exception = std::make_unique<Exception>(Exception(ErrorCodes::TIMEOUT_EXCEEDED,
                         msg_format, node_path, timeout_seconds, num_unfinished_hosts, num_active_hosts));
