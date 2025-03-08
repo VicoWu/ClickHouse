@@ -57,6 +57,8 @@ private:
         if (0 == priority)
             return;
         // 如果我的priority不是0，那么，看看是否有更高优先级(priority值更小)的query
+        // std::unique_lock是std库的自动锁管理工具，构造时加锁，析构时解锁，因此，方法
+        // 结束的时候，lock被析构，因此解锁
         std::unique_lock lock(mutex);
 
         /// Is there at least one more priority query?
@@ -97,7 +99,7 @@ public:
     {
     private:
         QueryPriorities & parent; // 这个HandleImpl所属的 QueryPriorities，记录了所有priority的优先级的统计信息
-        QueryPriorities::Container::value_type & value; // 这个优先级上的Query的统计信息
+        QueryPriorities::Container::value_type & value; // 这个优先级上的Query的数量
 
 
         // 构造 , 在 Handle insert(Priority priority) 中调用
@@ -141,7 +143,7 @@ public:
         // emplace 返回一个 std::pair，第一个元素是一个迭代器，指向容器中插入或查找的元素，第二个元素是一个布尔值，表示插入是否成功。
         auto it = container.emplace(priority, 0).first;
         ++it->second; // 将it->second递增，表示对应的priority的数量增加1
-        return std::make_shared<HandleImpl>(*this, *it); // *it代表这个priority对应的std::pair
+        return std::make_shared<HandleImpl>(*this, *it); // *it代表这个priority对应的std::pair的value，即当前priority的query的数量
     }
 };
 
