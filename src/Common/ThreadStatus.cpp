@@ -129,6 +129,7 @@ ThreadStatus::ThreadStatus(bool check_current_thread_on_destruction_)
         }
     }
 #endif
+    LOG_INFO(log, "Creating ThreadStatus with thread id {}", thread_id);
 }
 
 ThreadGroupPtr ThreadStatus::getThreadGroup() const

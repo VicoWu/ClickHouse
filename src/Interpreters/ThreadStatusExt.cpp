@@ -50,6 +50,8 @@ ThreadGroup::ThreadGroup(ContextPtr query_context_, FatalErrorCallback fatal_err
     , global_context(query_context_->getGlobalContext())
     , fatal_error_callback(fatal_error_callback_)
 {
+    log = getLogger("ThreadGroup");
+    LOG_INFO(log, "Creating thread group with master_thread_id {}", master_thread_id);
     shared_data.query_is_canceled_predicate = [this] () -> bool {
             if (auto context_locked = query_context.lock())
             {
@@ -220,7 +222,7 @@ void ThreadStatus::applyQuerySettings()
     Int32 new_os_thread_priority = static_cast<Int32>(settings.os_thread_priority);
     if (new_os_thread_priority && hasLinuxCapability(CAP_SYS_NICE))
     {
-        LOG_INFO(log, "Setting nice to {} for thread thread_id. ", new_os_thread_priority);
+        LOG_INFO(log, "Setting nice to {} for thread thread_id {}", new_os_thread_priority);
 
         if (0 != setpriority(PRIO_PROCESS, static_cast<unsigned>(thread_id), new_os_thread_priority))
             throw ErrnoException(ErrorCodes::CANNOT_SET_THREAD_PRIORITY, "Cannot 'setpriority'");
