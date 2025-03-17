@@ -222,7 +222,7 @@ void ThreadStatus::applyQuerySettings()
     Int32 new_os_thread_priority = static_cast<Int32>(settings.os_thread_priority);
     if (new_os_thread_priority && hasLinuxCapability(CAP_SYS_NICE))
     {
-        LOG_INFO(log, "Setting nice to {} for thread thread_id {}", new_os_thread_priority);
+        LOG_INFO(log, "Setting nice to {} for thread {}", new_os_thread_priority, thread_id);
 
         if (0 != setpriority(PRIO_PROCESS, static_cast<unsigned>(thread_id), new_os_thread_priority))
             throw ErrnoException(ErrorCodes::CANNOT_SET_THREAD_PRIORITY, "Cannot 'setpriority'");
