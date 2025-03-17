@@ -130,6 +130,8 @@ private:
 
     /// Peak threads count in the group
     size_t peak_threads_usage TSA_GUARDED_BY(mutex) = 0;
+
+    LoggerPtr log = nullptr;
 };
 
 /**
