@@ -287,7 +287,7 @@ void ThreadStatus::detachFromGroup()
     if (os_thread_priority)
     {
         LOG_TRACE(log, "Resetting nice");
-        LOG_INFO(log, "Resetting nice to 0 for thread {}", thread_id)
+        LOG_INFO(log, "Resetting nice to 0 for thread {}", thread_id);
 
         if (0 != setpriority(PRIO_PROCESS, static_cast<int>(thread_id), 0))
             LOG_ERROR(log, "Cannot 'setpriority' back to zero: {}", errnoToString());
