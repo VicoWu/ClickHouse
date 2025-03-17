@@ -220,7 +220,7 @@ void ThreadStatus::applyQuerySettings()
     Int32 new_os_thread_priority = static_cast<Int32>(settings.os_thread_priority);
     if (new_os_thread_priority && hasLinuxCapability(CAP_SYS_NICE))
     {
-        LOG_TRACE(log, "Setting nice to {}", new_os_thread_priority);
+        LOG_INFO(log, "Setting nice to {} for thread thread_id. ", new_os_thread_priority);
 
         if (0 != setpriority(PRIO_PROCESS, static_cast<unsigned>(thread_id), new_os_thread_priority))
             throw ErrnoException(ErrorCodes::CANNOT_SET_THREAD_PRIORITY, "Cannot 'setpriority'");
@@ -287,6 +287,7 @@ void ThreadStatus::detachFromGroup()
     if (os_thread_priority)
     {
         LOG_TRACE(log, "Resetting nice");
+        LOG_INFO(log, "Resetting nice to 0 for thread {}", thread_id)
 
         if (0 != setpriority(PRIO_PROCESS, static_cast<int>(thread_id), 0))
             LOG_ERROR(log, "Cannot 'setpriority' back to zero: {}", errnoToString());

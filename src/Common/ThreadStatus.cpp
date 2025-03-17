@@ -69,7 +69,11 @@ static thread_local bool has_alt_stack = false;
 
 ThreadGroup::ThreadGroup()
     : master_thread_id(CurrentThread::get().thread_id)
-{}
+{
+    log = getLogger("ThreadGroup");
+    LOG_INFO(log, "Creating thread group with master_thread_id {}", master_thread_id);
+
+}
 
 ThreadStatus::ThreadStatus(bool check_current_thread_on_destruction_)
     : thread_id{getThreadId()}, check_current_thread_on_destruction(check_current_thread_on_destruction_)
