@@ -71,13 +71,14 @@ ThreadGroup::ThreadGroup()
     , memory_spill_scheduler(false)
 {}
 
+
 ThreadStatus::ThreadStatus(bool check_current_thread_on_destruction_)
     : thread_id{getThreadId()}, check_current_thread_on_destruction(check_current_thread_on_destruction_)
 {
     chassert(!current_thread);
 
     last_rusage = std::make_unique<RUsageCounters>();
-
+    // 每一个线程的ThreadStatus初始化的时候，就会有一个自己的memory_tracker
     memory_tracker.setDescription("Thread");
     log = getLogger("ThreadStatus");
 
@@ -273,6 +274,13 @@ void ThreadStatus::onFatalError()
 
 ThreadStatus * MainThreadStatus::main_thread = nullptr;
 
+/**
+ * 这是 C++11 起推荐的线程安全单例实现方式。
+ * static 表示 thread_status 只会被初始化一次，不管调用 getInstance() 多少次。
+ * 初始化时机是：第一次调用这个函数时。
+ * 由于在Server启动的时候会首次调用MainThreadStatus::getInstance()，
+ * 因此这里的MainThreadStatus就是ClickHouseServer对应的ThreadStatus实现
+ */
 MainThreadStatus & MainThreadStatus::getInstance()
 {
     static MainThreadStatus thread_status;

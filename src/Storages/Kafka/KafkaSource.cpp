@@ -87,7 +87,7 @@ Chunk KafkaSource::generateImpl()
     if (!consumer)
     {
         auto timeout = std::chrono::milliseconds(context->getSettingsRef()[Setting::kafka_max_wait_ms].totalMilliseconds());
-        consumer = storage.popConsumer(timeout);
+        consumer = storage.popConsumer(timeout); // 从池子中取出一个Consumer
 
         if (!consumer)
             return {};

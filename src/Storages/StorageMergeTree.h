@@ -23,6 +23,9 @@ namespace DB
 {
 
 /** See the description of the data structure in MergeTreeData.
+ *  StorageMergeTree代表的是所有的MergeTree einge，比如SummingMergeTree, ReplacingMergeTree， AggregatingMergeTree 等等
+ *  StorageReplicatedMergeTree是这些MergeTree 的replication版本
+ *
   */
 class StorageMergeTree final : public MergeTreeData
 {

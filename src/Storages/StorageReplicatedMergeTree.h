@@ -418,6 +418,7 @@ private:
 
     /// If true, the table is offline and can not be written to it.
     /// This flag is managed by RestartingThread.
+    // Readonly的状态是由 ReplicatedMergeTreeRestartingThread::setReadonly()等方法去控制的
     std::atomic_bool is_readonly {true};
     std::atomic_uint32_t readonly_start_time{0};
 

@@ -123,12 +123,12 @@ public:
 
     Int64 get() const
     {
-        return amount.load(std::memory_order_relaxed);
+        return amount.load(std::memory_order_relaxed); // 获取这个原子值
     }
 
     Int64 getRSS() const
     {
-        return rss.load(std::memory_order_relaxed);
+        return rss.load(std::memory_order_relaxed); // 获取rss的值
     }
 
     // Merges and mutations may pass memory ownership to other threads thus in the end of execution
@@ -211,7 +211,8 @@ public:
     /// The memory consumption could be shown in realtime via CurrentMetrics counter
     void setMetric(CurrentMetrics::Metric metric_)
     {
-        metric.store(metric_, std::memory_order_relaxed);
+        // 在 MemoryTracker::allocImpl中修改对应的metric
+        metric.store(metric_, std::memory_order_relaxed); // 将metric_原子地写入变量metric中
     }
 
     CurrentMetrics::Metric getMetric()
@@ -252,7 +253,7 @@ public:
 
     /// update values based on external information (e.g. jemalloc's stat)
     static void updateRSS(Int64 rss_);
-    static void updateAllocated(Int64 allocated_, bool log_change);
+    static void updateAllocatedtotal_memory_tracker(Int64 allocated_, bool log_change);
 
     /// Prints info about peak memory consumption into log.
     void logPeakMemoryUsage();
@@ -260,7 +261,11 @@ public:
     void debugLogBigAllocationWithoutCheck(Int64 size [[maybe_unused]]);
 };
 
+// 搜索 MemoryTracker total_memory_tracker， 在MemoryTracker.cpp中定义
+// MemoryTracker total_memory_tracker(nullptr, VariableContext::Global); 中定义
 extern MemoryTracker total_memory_tracker;
+
+// 搜索 MemoryTracker background_memory_tracker，   在MemoryTracker.cpp中定义
 extern MemoryTracker background_memory_tracker;
 
 bool canEnqueueBackgroundTask();

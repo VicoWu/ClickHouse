@@ -177,6 +177,7 @@ private:
  * See also:
  * - https://en.cppreference.com/w/cpp/language/constinit
  * - https://github.com/ClickHouse/ClickHouse/pull/40078
+ * 一个thread_local的ThreadStatus指针，在ThreadStatus.cpp中定义的
  */
 extern thread_local constinit ThreadStatus * current_thread;
 
@@ -199,8 +200,8 @@ public:
     /// Points to performance_counters by default.
     /// Could be changed to point to another object to calculate performance counters for some narrow scope.
     ProfileEvents::Counters * current_performance_counters{&performance_counters};
-
-    MemoryTracker memory_tracker{VariableContext::Thread};
+    // 每一个线程都有一个自己的MemoryTracker对象
+    MemoryTracker memory_tracker{VariableContext::Thread}; // 线程级别(最低级别)的MemoryTracker
     /// Small amount of untracked memory (per thread atomic-less counter)
     Int64 untracked_memory = 0;
     /// Each thread could new/delete memory in range of (-untracked_memory_limit, untracked_memory_limit) without access to common counters.
@@ -360,7 +361,7 @@ class MainThreadStatus : public ThreadStatus
 {
 public:
     static MainThreadStatus & getInstance();
-    static ThreadStatus * get() { return main_thread; }
+    static ThreadStatus * get() { return main_thread; } // ClickHouse Server启动的时候就会创建一个全局唯一的单例的 MainThreadStatus main_thread
     static bool isMainThread() { return main_thread == current_thread; }
 
     ~MainThreadStatus();

@@ -242,10 +242,10 @@ off_t ReadBufferFromFileDescriptor::seek(off_t offset, int whence)
 
 void ReadBufferFromFileDescriptor::rewind()
 {
-    if (!use_pread)
+    if (!use_pread) // 只有当不适用pread的时候，我们进行rewind的时候需要重新的reseek
     {
         ProfileEvents::increment(ProfileEvents::Seek);
-        off_t res = ::lseek(fd, 0, SEEK_SET);
+        off_t res = ::lseek(fd, 0, SEEK_SET); // 偏移量重新设置为0
         if (-1 == res)
             ErrnoException::throwFromPath(
                 ErrorCodes::CANNOT_SEEK_THROUGH_FILE, getFileName(), "Cannot seek through file {}", getFileName());

@@ -2253,6 +2253,9 @@ MergeTreeData::MutableDataPartPtr StorageReplicatedMergeTree::attachPartHelperFo
     return {};
 }
 
+/**
+ * 调用者是  StorageReplicatedMergeTree::processQueueEntry
+ */
 bool StorageReplicatedMergeTree::executeLogEntry(LogEntry & entry)
 {
     fiu_do_on(FailPoints::replicated_queue_fail_next_entry,
@@ -2345,7 +2348,7 @@ bool StorageReplicatedMergeTree::executeLogEntry(LogEntry & entry)
             /// We surely don't have this part locally as we've checked it before, so download it.
             [[fallthrough]];
         case LogEntry::GET_PART:
-            return executeFetch(entry);
+            return executeFetch(entry); // 从远程的replica上获取part
         case LogEntry::MERGE_PARTS:
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Merge has to be executed by another function");
         case LogEntry::MUTATE_PART:
@@ -2363,7 +2366,11 @@ bool StorageReplicatedMergeTree::executeLogEntry(LogEntry & entry)
     }
 }
 
-
+/**
+ * 从远程的replica上拉取part，这发生在已经从zookeeper上获取了对应的GET_PART的任务，然后开始从远程的source part上拉取对应的part
+ * 这个方法的调用既有可能来自于 GET_PART 请求(查看方法StorageReplicatedMergeTree::executeLogEntry)，
+ * 也有可能来自于MERGE_PARTS请求（ReplicatedMergeMutateTaskBase::executeImpl()方法）
+ */
 bool StorageReplicatedMergeTree::executeFetch(LogEntry & entry, bool need_to_check_missing_part)
 {
     /// Looking for covering part. After that entry.actual_new_part_name may be filled.
@@ -2510,7 +2517,7 @@ bool StorageReplicatedMergeTree::executeFetch(LogEntry & entry, bool need_to_che
                 LOG_DEBUG(log, "Will fetch part {} instead of {}", entry.actual_new_part_name, entry.new_part_name);
 
             String source_replica_path = fs::path(zookeeper_path) / "replicas" / replica;
-            if (!fetchPart(part_name,
+            if (!fetchPart(part_name, // 在这里从远程的replica上获取part
                 metadata_snapshot,
                 zookeeper_info.zookeeper_name,
                 source_replica_path,
@@ -3215,6 +3222,19 @@ void StorageReplicatedMergeTree::executeClonePartFromShard(const LogEntry & entr
 }
 
 
+/**
+ *
+当一个副本检测到自己缺少某个分区（可能是由于分区丢失或者没有被复制过来），它会在自己的复制队列中添加一个 GET_PART 操作。此时，副本会创建一个 GET_PART 类型的日志条目，并将其写入 ZooKeeper 中的队列。
+
+在 ZooKeeper 中，/replicas/{replica_name}/queue 是存放这些操作的地方。GET_PART 操作会被以 持久化顺序节点 的形式添加到队列中。ZooKeeper 会保证这些日志条目的顺序性，并确保其他副本能够看到这个请求。
+
+当其他副本看到这个 GET_PART 请求时，它们会检查自己的数据存储，如果拥有请求的分区，就会将该分区发送给请求方。
+
+具体来说，ClickHouse 会通过 ZooKeeper 在 /replicas/{replica_name}/parts 路径下查找请求的分区。如果找到该分区，副本就会通过网络把分区数据发送给请求的副本，
+ 并同时在 ZooKeeper 中记录该操作的状态。
+
+ 领取这个GET_PART/ATTACH_PART的请求然后执行这个请求是在方法
+ */
 void StorageReplicatedMergeTree::cloneReplica(const String & source_replica, Coordination::Stat source_is_lost_stat, zkutil::ZooKeeperPtr & zookeeper)
 {
     String source_path = fs::path(zookeeper_path) / "replicas" / source_replica;
@@ -3864,7 +3884,10 @@ ReplicatedMergeTreeQueue::SelectedEntryPtr StorageReplicatedMergeTree::selectQue
     return selected;
 }
 
-
+/**
+ * 调用者是 StorageReplicatedMergeTree::scheduleDataProcessingJob
+ * 这个方法是在一个独立的task pool中执行的，即BackgroundFetchesPoolTask
+ */
 bool StorageReplicatedMergeTree::processQueueEntry(ReplicatedMergeTreeQueue::SelectedEntryPtr selected_entry)
 {
     LogEntryPtr & entry = selected_entry->log_entry;
@@ -3909,6 +3932,7 @@ bool StorageReplicatedMergeTree::processQueueEntry(ReplicatedMergeTreeQueue::Sel
     });
 }
 
+
 bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssignee & assignee)
 {
     cleanup_thread.wakeupEarlierIfNeeded();
@@ -3926,8 +3950,10 @@ bool StorageReplicatedMergeTree::scheduleDataProcessingJob(BackgroundJobsAssigne
     auto job_type = selected_entry->log_entry->type;
 
     /// Depending on entry type execute in fetches (small) pool or big merge_mutate pool
+    // 对应的LogEntry 的生成是在 StorageReplicatedMergeTree::cloneReplica 和 StorageReplicatedMergeTree::removePartAndEnqueueFetch中
     if (job_type == LogEntry::GET_PART || job_type == LogEntry::ATTACH_PART)
     {
+        // 如果是LogEntry::GET_PART或者LogEntry::ATTACH_PART，那么会在一个独立的task pool中执行
         assignee.scheduleFetchTask(std::make_shared<ExecutableLambdaAdapter>(
             [this, selected_entry] () mutable
             {

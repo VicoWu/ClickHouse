@@ -174,9 +174,9 @@ ReservationPtr DiskLocal::reserve(UInt64 bytes)
 std::optional<UInt64> DiskLocal::tryReserve(UInt64 bytes)
 {
     std::lock_guard lock(DiskLocal::reservation_mutex);
-
+    // 磁盘的可用空间
     auto available_space = getAvailableSpace();
-
+    // 获取还未预留的可用空间
     UInt64 unreserved_space = available_space
         ? *available_space - std::min(*available_space, reserved_bytes)
         : std::numeric_limits<UInt64>::max();
@@ -188,7 +188,7 @@ std::optional<UInt64> DiskLocal::tryReserve(UInt64 bytes)
         return {unreserved_space};
     }
 
-    if (unreserved_space >= bytes)
+    if (unreserved_space >= bytes) // 还未预留的可用空间大于申请的空间，那么
     {
         if (available_space)
         {
@@ -210,9 +210,9 @@ std::optional<UInt64> DiskLocal::tryReserve(UInt64 bytes)
 
         ++reservation_count;
         reserved_bytes += bytes;
-        return {unreserved_space - bytes};
+        return {unreserved_space - bytes}; // 返回预留以后的可用空间
     }
-
+    // 剩余还未预留的空间大于磁盘请求，因此预留失败
     LOG_TRACE(logger, "Could not reserve {} on local disk {}. Not enough unreserved space", ReadableSize(bytes), backQuote(name));
 
 

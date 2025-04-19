@@ -7,7 +7,7 @@
 #include <memory>
 #include <string_view>
 
-
+// 前置声明
 namespace ProfileEvents
 {
 class Counters;
@@ -28,6 +28,9 @@ class InternalTextLogsQueue;
   * (to calculate query-related metrics and to allow to obtain query-related data from a thread).
   * Thread will propagate it's metrics to attached query.
   */
+  /**
+   * 这是一系列静态方法的工具类，用来将query/process 给 attach、detach导一个线程，从而可以计算与query或者从一个thread中获取与query相关的数据
+   */
 class CurrentThread
 {
 public:
@@ -64,8 +67,8 @@ public:
     inline ALWAYS_INLINE static MemoryTracker * getMemoryTracker()
     {
         if (!current_thread) [[unlikely]]
-            return nullptr;
-        return &current_thread->memory_tracker;
+            return nullptr; // 如果当前线程没有设置thread_local的current_thread变量，则返回null
+        return &current_thread->memory_tracker;// 返回thread_local的current_thread变量中的memory_tracker
     }
 
     /// Update read and write rows (bytes) statistics (used in system.query_thread_log)

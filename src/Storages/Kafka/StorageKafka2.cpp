@@ -169,7 +169,7 @@ StorageKafka2::StorageKafka2(
     storage_metadata.setComment(comment);
     setInMemoryMetadata(storage_metadata);
     setVirtuals(StorageKafkaUtils::createVirtuals((*kafka_settings)[KafkaSetting::kafka_handle_error_mode]));
-
+    // 假如我们设置了5个consumer，如果enable了thread_per_consumer， 那么就有5个task，否则只有1个task
     auto task_count = thread_per_consumer ? num_consumers : 1;
     for (size_t i = 0; i < task_count; ++i)
     {
@@ -1031,7 +1031,7 @@ StorageKafka2::PolledBatchInfo StorageKafka2::pollConsumer(
 void StorageKafka2::threadFunc(size_t idx)
 {
     chassert(idx < tasks.size());
-    auto task = tasks[idx];
+    auto task = tasks[idx]; // 取出对应的task
     std::optional<StallReason> maybe_stall_reason;
     try
     {
@@ -1052,6 +1052,7 @@ void StorageKafka2::threadFunc(size_t idx)
                 LOG_DEBUG(log, "Started streaming to {} attached views", num_views);
 
                 // Exit the loop & reschedule if some stream stalled
+                // 这是关键方法
                 if (maybe_stall_reason = streamToViews(idx); maybe_stall_reason.has_value())
                 {
                     LOG_TRACE(log, "Stream stalled.");

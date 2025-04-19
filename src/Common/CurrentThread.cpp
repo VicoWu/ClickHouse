@@ -44,8 +44,12 @@ ThreadStatus & CurrentThread::get()
     return *current_thread;
 }
 
+/**
+ *  CurrentThread的静态方法
+ */
 ProfileEvents::Counters & CurrentThread::getProfileEvents()
 {
+    // 如果current_thread不为空，那么返回ProfileEvents::Counters * 指针，否则，返回一个全局的 ProfileEvents::global_counters
     return current_thread ? *current_thread->current_performance_counters : ProfileEvents::global_counters;
 }
 

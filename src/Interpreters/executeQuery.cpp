@@ -316,7 +316,6 @@ addPrivilegesInfoToQueryLogElement(QueryLogElement & element, const ContextPtr c
         element.missing_privileges = privileges_info.missing_privileges;
     }
 }
-
 static void
 addStatusInfoToQueryLogElement(QueryLogElement & element, const QueryStatusInfo & info, const ASTPtr query_ast, const ContextPtr context_ptr)
 {

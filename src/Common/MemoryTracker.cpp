@@ -124,9 +124,22 @@ using namespace std::chrono_literals;
 
 static constexpr size_t log_peak_memory_usage_every = 1ULL << 30;
 
+/**
+ * total_memory_tracker 和 background_memory_tracker 是 全局唯一的实例，不属于任何类的成员，
+ * 而是定义在编译单元级别的 静态全局变量（static global instances）。
+ * VariableContext::Global是最高级别
+ */
 MemoryTracker total_memory_tracker(nullptr, VariableContext::Global);
+/**
+ * background_memory_tracker 也是全局唯一的，但是是total_memory_tracker树上的一棵子树
+ * VariableContext::User是第二高级别
+ */
 MemoryTracker background_memory_tracker(&total_memory_tracker, VariableContext::User, false);
 
+/**
+ * 设置层级，值越小层级越高
+ * @param level_
+ */
 MemoryTracker::MemoryTracker(VariableContext level_) : parent(&total_memory_tracker), level(level_) {}
 MemoryTracker::MemoryTracker(MemoryTracker * parent_, VariableContext level_) : parent(parent_), level(level_) {}
 
@@ -242,7 +255,7 @@ AllocationTrace MemoryTracker::allocImpl(Int64 size, bool throw_if_memory_exceed
             rss.fetch_add(size, std::memory_order_relaxed);
 
             auto metric_loaded = metric.load(std::memory_order_relaxed);
-            if (metric_loaded != CurrentMetrics::end())
+            if (metric_loaded != CurrentMetrics::end()) // 在这里修改对应的metric的值
                 CurrentMetrics::add(metric_loaded, size);
         }
 
@@ -531,6 +544,11 @@ void MemoryTracker::updateRSS(Int64 rss_)
     total_memory_tracker.rss.store(rss_, std::memory_order_relaxed);
 }
 
+/**
+ * 内存使用量修正
+ * @param allocated_
+ * @param log_change
+ */
 void MemoryTracker::updateAllocated(Int64 allocated_, bool log_change)
 {
     Int64 new_amount = allocated_;
@@ -540,7 +558,7 @@ void MemoryTracker::updateAllocated(Int64 allocated_, bool log_change)
             "Correcting the value of global memory tracker from {} to {}",
             ReadableSize(total_memory_tracker.amount.load(std::memory_order_relaxed)),
             ReadableSize(allocated_));
-
+    // 原子地交换当前内存值并返回交换前的值
     auto current_amount = total_memory_tracker.amount.exchange(new_amount, std::memory_order_relaxed);
     total_memory_tracker.uncorrected_amount += (current_amount - total_memory_tracker.last_corrected_amount);
     total_memory_tracker.last_corrected_amount = new_amount;
@@ -548,7 +566,7 @@ void MemoryTracker::updateAllocated(Int64 allocated_, bool log_change)
 
     auto metric_loaded = total_memory_tracker.metric.load(std::memory_order_relaxed);
     if (metric_loaded != CurrentMetrics::end())
-        CurrentMetrics::set(metric_loaded, new_amount);
+        CurrentMetrics::set(metric_loaded, new_amount); // 设置修正以后的值
 
     bool log_memory_usage = true;
     total_memory_tracker.updatePeak(new_amount, log_memory_usage);

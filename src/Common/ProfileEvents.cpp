@@ -1096,8 +1096,10 @@ ValueType getValueType(Event event)
 
 Event end() { return END; }
 
+// void increment(Event event, Count amount = 1);
 void increment(Event event, Count amount)
 {
+    // 搜索   ProfileEvents::Counters & CurrentThread::getProfileEvents()
     DB::CurrentThread::getProfileEvents().increment(event, amount);
 }
 

@@ -164,6 +164,7 @@ namespace ProfileEvents
     };
 
     /// Increment a counter for event. Thread-safe.
+    // 这是一个函数 ，不是静态方法 ，搜索  void increment(Event event, Count amount)
     void increment(Event event, Count amount = 1);
 
     /// The same as above but ignores value of setting 'trace_profile_events'

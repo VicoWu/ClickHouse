@@ -146,8 +146,8 @@ template <bool clear_memory_, bool populate>
 void * Allocator<clear_memory_, populate>::alloc(size_t size, size_t alignment)
 {
     checkSize(size);
-    auto trace = CurrentMemoryTracker::alloc(size);
-    void * ptr = allocNoTrack<clear_memory_, populate>(size, alignment);
+    auto trace = CurrentMemoryTracker::alloc(size); // 记录内存分配
+    void * ptr = allocNoTrack<clear_memory_, populate>(size, alignment); // 在这里真正进行内存分配
     trace.onAlloc(ptr, size);
     return ptr;
 }

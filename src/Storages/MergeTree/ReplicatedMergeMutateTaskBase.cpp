@@ -167,7 +167,7 @@ bool ReplicatedMergeMutateTaskBase::executeImpl()
         return false;
     };
 
-
+    // 在这里，会尝试进行fetch，而不是进行本地的merge操作
     auto execute_fetch = [&] (bool need_to_check_missing_part) -> bool
     {
         try
