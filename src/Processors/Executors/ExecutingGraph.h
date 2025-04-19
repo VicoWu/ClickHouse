@@ -24,7 +24,7 @@ public:
         Edge(uint64_t to_, bool backward_,
              uint64_t input_port_number_, uint64_t output_port_number_,
              std::vector<void *> * update_list)
-            : to(to_), backward(backward_)
+            : to(to_), backward(backward_) // 每个连接都会产生两个 Edge：一个正向的，一个反向的（backward 为 true）。
             , input_port_number(input_port_number_), output_port_number(output_port_number_)
         {
             update_info.update_list = update_list;
@@ -74,6 +74,7 @@ public:
     };
 
     /// Graph node. Represents single Processor.
+    // 每一个ExecutingGraph::Node代表了一个Processor
     struct Node
     {
         /// Processor and it's position in graph.
@@ -82,7 +83,7 @@ public:
 
         /// Direct edges are for output ports, back edges are for input ports.
         Edges direct_edges;
-        Edges back_edges;
+        Edges back_edges; // 正向边和反向边
 
         /// Current status. It is accessed concurrently, using mutex.
         ExecStatus status = ExecStatus::Idle;
@@ -169,7 +170,13 @@ private:
     std::mutex processors_mutex;
 
     SharedMutex nodes_mutex;
-
+    /**
+     * 这个标志位决定是否在执行过程中记录每个 Processor 的执行性能数据，包括：
+        执行次数（num_executed_jobs）
+        每次 prepare() 和 work() 的耗时（单位：纳秒）
+        是否发生异常
+        最近一次状态（last_processor_status）
+     */
     const bool profile_processors;
     bool cancelled = false;
 };

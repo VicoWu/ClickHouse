@@ -117,6 +117,12 @@ void ExecutorTasks::tryGetTask(ExecutionThreadContext & context)
     context.wait(finished);
 }
 
+/**
+ * 把已经准备好的 processor 任务放入对应的执行队列中，供线程执行
+ * @param queue 普通同步任务队列，包含一些 ready 状态的 ProcessorNode。
+ * @param async_queue 异步任务队列，适用于 AsyncProcessor（如异步 IO）
+ * @param context 当前线程的执行上下文对象（包含当前线程是否有任务、是否在运行等）
+ */
 void ExecutorTasks::pushTasks(Queue & queue, Queue & async_queue, ExecutionThreadContext & context)
 {
     context.setTask(nullptr);
@@ -126,6 +132,7 @@ void ExecutorTasks::pushTasks(Queue & queue, Queue & async_queue, ExecutionThrea
         && context.num_scheduled_local_tasks < ExecutionThreadContext::max_scheduled_local_tasks)
     {
         ++context.num_scheduled_local_tasks;
+        // 当前线程就可以直接执行这个 task. 优先把任务分配到“本地线程”，减少线程切换。如果线程刚好闲着并且任务数量不多，就给它塞一个。
         context.setTask(queue.front());
         queue.pop();
     }
@@ -134,6 +141,7 @@ void ExecutorTasks::pushTasks(Queue & queue, Queue & async_queue, ExecutionThrea
 
     if (!queue.empty() || !async_queue.empty())
     {
+        // 这里开始进入线程安全区（拿锁了），准备处理剩下的队列
         std::unique_lock lock(mutex);
 
 #if defined(OS_LINUX)
@@ -141,14 +149,18 @@ void ExecutorTasks::pushTasks(Queue & queue, Queue & async_queue, ExecutionThrea
         {
             int fd = async_queue.front()->processor->schedule();
             async_task_queue.addTask(context.thread_number, async_queue.front(), fd);
-            async_queue.pop();
+            // schedule() 通常会返回一个 fd，它用来注册到 epoll 等机制上，等 IO 可读可写时再唤醒执行
+            // 用到了基于文件描述符的 epoll reactor 模型。
+            async_queue.pop(); // AsyncSource, AsyncSink 这样的异步 processor。
         }
 #endif
 
+        // 所有线程共用一个 task_queue，通过 thread number 做任务调度
         while (!queue.empty() && !finished)
         {
+            // 把queue中的第一个元素放到task_queue中
             task_queue.push(queue.front(), context.thread_number);
-            queue.pop();
+            queue.pop(); // 已经放到task_queue中了，弹出这个元素
         }
 
         /// Wake up at least one thread that will wake up other threads if required

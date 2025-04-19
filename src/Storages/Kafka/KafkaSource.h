@@ -29,7 +29,7 @@ public:
 
     String getName() const override { return storage.getName(); }
 
-    Chunk generate() override;
+    Chunk generate() override; // 继承的ISource的virtual方法
 
     void commit();
     bool isStalled() const { return !consumer || consumer->isStalled(); }

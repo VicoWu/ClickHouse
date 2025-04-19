@@ -53,6 +53,7 @@ PipelineExecutor::PipelineExecutor(std::shared_ptr<Processors> & processors, Que
     }
     try
     {
+        // 构造ExecutingGraph
         graph = std::make_unique<ExecutingGraph>(processors, profile_processors);
     }
     catch (Exception & exception)
@@ -115,6 +116,13 @@ bool PipelineExecutor::tryUpdateExecutionStatus(ExecutionStatus expected, Execut
     return execution_status.compare_exchange_strong(expected, desired);
 }
 
+/**
+ * 在CompletedPipelineExecutor::execute() 中被调用
+ * 可以把 PipelineExecutor 想象成一个「调度器」，它会不停地从 sink 开始「拉数据」，
+ * 直到上游没有数据了（比如 Kafka 没有更多消息）。
+ * @param num_threads
+ * @param concurrency_control
+ */
 void PipelineExecutor::execute(size_t num_threads, bool concurrency_control)
 {
     checkTimeLimit();
@@ -128,7 +136,7 @@ void PipelineExecutor::execute(size_t num_threads, bool concurrency_control)
         executeImpl(num_threads, concurrency_control);
 
         /// Log all of the LOGICAL_ERROR exceptions.
-        for (auto & node : graph->nodes)
+        for (auto & node : graph->nodes) //
             if (node->exception && getExceptionErrorCode(node->exception) == ErrorCodes::LOGICAL_ERROR)
                 tryLogException(node->exception, log);
 
@@ -278,6 +286,7 @@ void PipelineExecutor::executeStepImpl(size_t thread_num, std::atomic_bool * yie
     Stopwatch total_time_watch;
 #endif
 
+    // 每一个Context对应了一个Processor
     auto & context = tasks.getThreadContext(thread_num);
     bool yield = false;
 
@@ -293,13 +302,13 @@ void PipelineExecutor::executeStepImpl(size_t thread_num, std::atomic_bool * yie
             if (tasks.isFinished())
                 break;
 
-            if (!context.executeTask())
+            if (!context.executeTask()) // 执行task，调用了 ExecutionThreadContext::executeTask()
                 cancel(ExecutionStatus::Exception);
 
-            if (tasks.isFinished())
+            if (tasks.isFinished()) // 所有的task都已经执行结束
                 break;
 
-            if (!checkTimeLimitSoft())
+            if (!checkTimeLimitSoft()) // 已经到了执行时间限制
                 break;
 
 #ifndef NDEBUG
@@ -312,13 +321,14 @@ void PipelineExecutor::executeStepImpl(size_t thread_num, std::atomic_bool * yie
                 Queue async_queue;
 
                 /// Prepare processor after execution.
+                // 搜索 ExecutingGraph::updateNode
                 auto status = graph->updateNode(context.getProcessorID(), queue, async_queue);
                 if (status == ExecutingGraph::UpdateNodeStatus::Exception)
                     cancel(ExecutionStatus::Exception);
 
                 /// Push other tasks to global queue.
                 if (status == ExecutingGraph::UpdateNodeStatus::Done)
-                    tasks.pushTasks(queue, async_queue, context);
+                    tasks.pushTasks(queue, async_queue, context); // 搜索 ExecutorTasks::pushTasks
             }
 
 #ifndef NDEBUG
@@ -350,6 +360,11 @@ void PipelineExecutor::executeStepImpl(size_t thread_num, std::atomic_bool * yie
 #endif
 }
 
+/**
+ * 在 PipelineExecutor::executeImpl 中被调用
+ * @param num_threads
+ * @param concurrency_control
+ */
 void PipelineExecutor::initializeExecution(size_t num_threads, bool concurrency_control)
 {
     is_execution_initialized = true;
@@ -425,6 +440,11 @@ void PipelineExecutor::spawnThreadsImpl()
     }
 }
 
+/**
+ * PipelineExecutor::execute 中被调用
+ * @param num_threads
+ * @param concurrency_control
+ */
 void PipelineExecutor::executeImpl(size_t num_threads, bool concurrency_control)
 {
     initializeExecution(num_threads, concurrency_control);
@@ -442,13 +462,13 @@ void PipelineExecutor::executeImpl(size_t num_threads, bool concurrency_control)
         }
     );
 
-    if (num_threads > 1)
+    if (num_threads > 1) // 多线程模式下执行
     {
         spawnThreads(); // start at least one thread
         tasks.processAsyncTasks();
         pool->wait();
     }
-    else
+    else // 单线程模式下执行
     {
         auto slot = cpu_slots->tryAcquire();
         executeSingleThread(0);

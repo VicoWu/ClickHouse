@@ -397,6 +397,9 @@ void StorageMaterializedView::read(
     }
 }
 
+/**
+ * 将数据从MV写入到下层的Local表
+ */
 SinkToStoragePtr StorageMaterializedView::write(const ASTPtr & query, const StorageMetadataPtr & /*metadata_snapshot*/, ContextPtr local_context, bool async_insert)
 {
     auto context = getInMemoryMetadataPtr()->getSQLSecurityOverriddenContext(local_context);
@@ -895,6 +898,9 @@ void StorageMaterializedView::updateTargetTableId(std::optional<String> database
         target_table_id.table_name = *std::move(table_name);
 }
 
+/**
+ * 注册MV表
+ */
 void registerStorageMaterializedView(StorageFactory & factory)
 {
     factory.registerStorage("MaterializedView", [](const StorageFactory::Arguments & args)

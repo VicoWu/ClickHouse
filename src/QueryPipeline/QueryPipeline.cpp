@@ -485,17 +485,23 @@ void QueryPipeline::complete(std::shared_ptr<SinkToStorage> sink)
     complete(Chain(std::move(sink)));
 }
 
+/**
+ * 这里的pipe是经过unit的多个 KafkaSource
+ * 这是push模式
+ * @param pipe
+ */
 void QueryPipeline::complete(Pipe pipe)
 {
     if (!pushing())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Pipeline must be pushing to be completed with pipe");
 
-    pipe.resize(1);
+    pipe.resize(1); // 把pipe的多个processor resize成一个
     pipe.dropExtremes();
     pipe.dropTotals();
+    // 把 KafkaSource的pipe 的 output port 和 当前QueryPiepline 的 sink input 连接起来（例如连接到 Materialized View 的 sink）。
     connect(*pipe.getOutputPort(0), *input);
     input = nullptr;
-
+    // 把 pipe 里的所有 processor 拿出来，接入到当前 pipeline 的 processor 列表中，确保后面执行器能遍历整个图。
     auto pipe_processors = Pipe::detachProcessors(std::move(pipe));
     processors->insert(processors->end(), pipe_processors.begin(), pipe_processors.end());
 }

@@ -593,6 +593,10 @@ void StorageKafka::threadFunc(size_t idx)
 }
 
 
+/**
+ * 向View中写数据从这里触发。这里会通过KafkaSource这个IProcessor的实现类，来实现整个的有向无环图
+ * @return
+ */
 bool StorageKafka::streamToViews()
 {
     Stopwatch watch;
@@ -608,8 +612,8 @@ bool StorageKafka::streamToViews()
     auto storage_snapshot = getStorageSnapshot(getInMemoryMetadataPtr(), getContext());
 
     // Create an INSERT query for streaming data
-    auto insert = std::make_shared<ASTInsertQuery>();
-    insert->table_id = table_id;
+    auto insert = std::make_shared<ASTInsertQuery>(); // 构建一个虚拟的Insert 操作
+    insert->table_id = table_id; // Insert的目标表
 
     size_t block_size = getMaxBlockSize();
 
@@ -619,19 +623,23 @@ bool StorageKafka::streamToViews()
 
     // Create a stream for each consumer and join them in a union stream
     // Only insert into dependent views and expect that input blocks contain virtual columns
+    // 这不是一个真正执行的插入语句，只是构建了一个 AST 节点，用于分析结构。
     InterpreterInsertQuery interpreter(
         insert,
         kafka_context,
         /* allow_materialized */ false,
-        /* no_squash */ true,
+        /* no_squash */ true, // 不进行squash
         /* no_destination */ true,
         /* async_insert */ false);
+    // 注意这里的 execute() 实际上内部会走到 buildInsertPipeline()，这个函数本身会根据 no_destination = true 走不同逻辑，
+    // 它不会往主表写数据，只是拿到 数据应该写成什么格式的 header。
     auto block_io = interpreter.execute();
 
     // Create a stream for each consumer and join them in a union stream
     std::vector<std::shared_ptr<KafkaSource>> sources;
-    Pipes pipes;
+    Pipes pipes; // 构造一个Pipes对象
 
+    // 如果 thread_per_consumer = true，那么只有一个stream，否则，有num_consumers个stream
     auto stream_count = thread_per_consumer ? 1 : num_consumers;
     sources.reserve(stream_count);
     pipes.reserve(stream_count);
@@ -639,7 +647,7 @@ bool StorageKafka::streamToViews()
     {
         auto source = std::make_shared<KafkaSource>(*this, storage_snapshot, kafka_context, block_io.pipeline.getHeader().getNames(), log, block_size, false);
         sources.emplace_back(source);
-        pipes.emplace_back(source);
+        pipes.emplace_back(source); // 这里进行Pipe的原地构造
 
         // Limit read batch to maximum block size to allow DDL
         StreamLocalLimits limits;
@@ -648,9 +656,10 @@ bool StorageKafka::streamToViews()
             ? (*kafka_settings)[KafkaSetting::kafka_flush_interval_ms]
             : getContext()->getSettingsRef()[Setting::stream_flush_interval_ms];
 
-        source->setTimeLimit(max_execution_time);
+        source->setTimeLimit(max_execution_time); // 每一个source的最长执行时间
     }
 
+    // 将多个Pipe合并成一个Pipe
     auto pipe = Pipe::unitePipes(std::move(pipes));
 
     // We can't cancel during copyData, as it's not aware of commits and other kafka-related stuff.
@@ -658,6 +667,8 @@ bool StorageKafka::streamToViews()
 
     std::atomic_size_t rows = 0;
     {
+        // 这里的block_id.pipeline是一个QueryPipeline，并不是一个Pipe
+        // 查看 void QueryPipeline::complete(Pipe pipe)
         block_io.pipeline.complete(std::move(pipe));
 
         // we need to read all consumers in parallel (sequential read may lead to situation
@@ -666,8 +677,9 @@ bool StorageKafka::streamToViews()
         block_io.pipeline.setConcurrencyControl(kafka_context->getSettingsRef()[Setting::use_concurrency_control]);
 
         block_io.pipeline.setProgressCallback([&](const Progress & progress) { rows += progress.read_rows.load(); });
+        // ClickHouse 的 PipelineExecutor 是 Pull 模型，数据是从 sink 端「往前 pull」出来的：
         CompletedPipelineExecutor executor(block_io.pipeline);
-        executor.execute();
+        executor.execute(); // CompletedPipelineExecutor::execute
     }
 
     bool some_stream_is_stalled = false;

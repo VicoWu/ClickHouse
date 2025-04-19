@@ -63,9 +63,12 @@ void CompletedPipelineExecutor::setCancelCallback(std::function<bool()> is_cance
     interactive_timeout_ms = interactive_timeout_ms_;
 }
 
+/**
+ * bool StorageKafka::streamToViews() 中被调用
+ */
 void CompletedPipelineExecutor::execute()
 {
-    if (interactive_timeout_ms)
+    if (interactive_timeout_ms) // 调用 setCancelCallback的时候设置，在StorageKafka::streamToViews()中没有设置
     {
         data = std::make_unique<Data>();
         data->executor = std::make_shared<PipelineExecutor>(pipeline.processors, pipeline.process_list_element);
@@ -99,7 +102,7 @@ void CompletedPipelineExecutor::execute()
             std::rethrow_exception(data->exception);
     }
     else
-    {
+    {   // 没有timeout，走普通同步模式，使用当前的processors构造这个PipelineExecutor对象
         PipelineExecutor executor(pipeline.processors, pipeline.process_list_element);
         executor.setReadProgressCallback(pipeline.getReadProgressCallback());
         executor.execute(pipeline.getNumThreads(), pipeline.getConcurrencyControl());

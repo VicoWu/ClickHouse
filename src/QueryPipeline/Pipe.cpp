@@ -322,16 +322,17 @@ Pipe Pipe::unitePipes(Pipes pipes, Processors * collected_processors, bool allow
 
         res.max_parallel_streams += pipe.max_parallel_streams;
 
-        if (pipe.totals_port)
+        if (pipe.totals_port) // 和并 total ports
             totals.emplace_back(pipe.totals_port);
 
-        if (pipe.extremes_port)
+        if (pipe.extremes_port) // 合并extremes port
             extremes.emplace_back(pipe.extremes_port);
     }
 
-    size_t num_processors = res.processors->size();
-
+    size_t num_processors = res.processors->size(); // 所有的processors
+    // 构造一个最终的totals_port
     res.totals_port = uniteTotals(totals, res.header, *res.processors);
+    // 构造一个最终的extremes_port
     res.extremes_port = uniteExtremes(extremes, res.header, *res.processors);
 
     if (res.collected_processors)
@@ -446,8 +447,11 @@ void Pipe::addTransform(ProcessorPtr transform, InputPort * totals, InputPort * 
         static_cast<OutputPort *>(nullptr), static_cast<OutputPort *>(nullptr));
 }
 
+/**
+ * 用一个变换器（Processor）“接住”当前的所有输出口，然后它再输出新的结果，继续传下去。
+ */
 void Pipe::addTransform(
-    ProcessorPtr transform,
+    ProcessorPtr transform, // 要加入的新处理器（比如 ResizeProcessor）
     InputPort * totals_in, InputPort * extremes_in,
     OutputPort * totals_out, OutputPort * extremes_out)
 {
@@ -468,7 +472,7 @@ void Pipe::addTransform(
 
     auto & inputs = transform->getInputs();
     auto & outputs = transform->getOutputs();
-
+    // 确保新的 Processor 有足够的输入口来接住当前 Pipe 的所有输出口 + 特殊流。
     size_t expected_inputs = output_ports.size() + (totals_in ? 1 : 0) + (extremes_in ? 1 : 0);
     if (inputs.size() != expected_inputs)
         throw Exception(
@@ -541,6 +545,7 @@ void Pipe::addTransform(
     extremes_port = extremes_out ? extremes_out : extremes_port;
 
     size_t next_output = 0;
+    // 把 Pipe 中的所有输出口，连接到 transform 的对应输入口。
     for (auto & input : inputs)
     {
         if (&input != totals_in && &input != extremes_in)
@@ -552,7 +557,7 @@ void Pipe::addTransform(
 
     output_ports.clear();
     output_ports.reserve(outputs.size());
-    for (auto & output : outputs)
+    for (auto & output : outputs) // 更新 Pipe 的输出口
     {
         if (&output != totals_out && &output != extremes_out)
             output_ports.emplace_back(&output);
@@ -571,7 +576,7 @@ void Pipe::addTransform(
 
     if (collected_processors)
         collected_processors->emplace_back(transform);
-
+    // processor 到 pipe
     processors->emplace_back(std::move(transform));
 
     max_parallel_streams = std::max<size_t>(max_parallel_streams, output_ports.size());
@@ -687,9 +692,10 @@ void Pipe::resize(size_t num_streams, bool force, bool strict)
 {
     if (output_ports.empty())
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Cannot resize an empty Pipe");
-
+    // 如果没有强制(默认不强制)， 并且目标的stream和当前的outputPorts已经一致了，那么什么都不做
     if (!force && num_streams == numOutputPorts())
         return;
+    // 如果是强制的，或者当前的port的数量和要求的数量不一致，那么就进行resize
 
     ProcessorPtr resize;
 
@@ -697,7 +703,8 @@ void Pipe::resize(size_t num_streams, bool force, bool strict)
         resize = std::make_shared<StrictResizeProcessor>(getHeader(), numOutputPorts(), num_streams);
     else
         resize = std::make_shared<ResizeProcessor>(getHeader(), numOutputPorts(), num_streams);
-
+    // 用一个新构造的Processor ResizeProcessor 的所有input来接住当前的stream的所有output，然后用ResizeProcessor的
+    // output来作为output
     addTransform(std::move(resize));
 }
 

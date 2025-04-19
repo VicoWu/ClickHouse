@@ -342,6 +342,24 @@ Chain InterpreterInsertQuery::buildChain(
     return chain;
 }
 
+/**
+ * 调用者是 InterpreterInsertQuery::buildPreAndSinkChains
+ * 构建数据插入的终端处理链（Sink Chain），也就是将数据写入目标表或者通过 Materialized View 传递到其他表的逻辑。
+    数据源 → 预处理 → sink（写入表）
+                        ↘（也可能触发 materialized views）
+   这个 buildSink 就是构建“写入表”的部分，有两种可能路径：
+     ✅ 直接插入目标表（如普通的 MergeTree 表）
+     🔁 通过 Materialized View 转发，插入对应的目标表
+
+ *
+ * @param table
+ * @param view_level
+ * @param metadata_snapshot
+ * @param thread_status_holder
+ * @param running_group
+ * @param elapsed_counter_ms
+ * @return
+ */
 Chain InterpreterInsertQuery::buildSink(
     const StoragePtr & table,
     size_t view_level,
@@ -364,6 +382,7 @@ Chain InterpreterInsertQuery::buildSink(
 
     /// NOTE: we explicitly ignore bound materialized views when inserting into Kafka Storage.
     ///       Otherwise we'll get duplicates when MV reads same rows again from Kafka.
+    // 判断是否可以直接插入表（跳过 Materialized View）
     if (table->noPushingToViews() && !no_destination)
     {
         auto sink = table->write(query_ptr, metadata_snapshot, context_ptr, async_insert);
@@ -371,7 +390,8 @@ Chain InterpreterInsertQuery::buildSink(
         out.addSource(std::move(sink));
     }
     else
-    {
+    {   // 走 Materialized View 的处理链
+        // 它会遍历与该表绑定的所有 Materialized View，并为每个生成一个子 chain
         out = buildPushingToViewsChain(table, metadata_snapshot, context_ptr,
             query_ptr, view_level, no_destination,
             thread_status_holder, running_group, elapsed_counter_ms, async_insert);
@@ -468,6 +488,18 @@ Chain InterpreterInsertQuery::buildPreSinkChain(
     return out;
 }
 
+/**
+ *  构建用于插入数据的两部分处理链：
+    - PreSinkChain（预处理链）：插入前的数据转换逻辑，比如 MaterializedView 的 SELECT 部分。
+    - SinkChain（写入链）：最终将数据写入目标存储（如主表或物化视图目标表）的逻辑。
+ * @param presink_streams
+ * @param sink_streams
+ * @param table
+ * @param view_level
+ * @param metadata_snapshot
+ * @param query_sample_block
+ * @return
+ */
 std::pair<std::vector<Chain>, std::vector<Chain>> InterpreterInsertQuery::buildPreAndSinkChains(
     size_t presink_streams,
     size_t sink_streams,
@@ -731,7 +763,13 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
     return QueryPipelineBuilder::getPipeline(std::move(pipeline));
 }
 
-
+/**
+ * 调用者是 InterpreterInsertQuery::execute()
+ * 为一条 INSERT 查询构造一个数据处理的 QueryPipeline（查询管道）。
+ * @param query
+ * @param table
+ * @return
+ */
 QueryPipeline InterpreterInsertQuery::buildInsertPipeline(ASTInsertQuery & query, StoragePtr table)
 {
     const Settings & settings = getContext()->getSettingsRef();
@@ -807,6 +845,10 @@ QueryPipeline InterpreterInsertQuery::buildInsertPipeline(ASTInsertQuery & query
 }
 
 
+/**
+ * 在这里调用 bool StorageKafka::streamToViews()
+ * @return
+ */
 BlockIO InterpreterInsertQuery::execute()
 {
     const Settings & settings = getContext()->getSettingsRef();
@@ -861,7 +903,7 @@ BlockIO InterpreterInsertQuery::execute()
         }
     }
     else
-    {
+    {   // 不是select query，因此这里调用的是 buildInsertPipeline
         res.pipeline = buildInsertPipeline(query, table);
     }
 

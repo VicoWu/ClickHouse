@@ -54,6 +54,8 @@ struct ThreadStatusesHolder
 using ThreadStatusesHolderPtr = std::shared_ptr<ThreadStatusesHolder>;
 
 /** Writes data to the specified table and to all dependent materialized views.
+ *  调用者是 Chain InterpreterInsertQuery::buildSink(
+ *  整个 SinkChain 会变成一个 多路下发结构，数据将被复制到多个 sink
   */
 Chain buildPushingToViewsChain(
     const StoragePtr & storage,

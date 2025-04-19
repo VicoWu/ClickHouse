@@ -288,6 +288,9 @@ Chunk KafkaSource::generateImpl()
     return Chunk(result_block.getColumns(), result_block.rows());
 }
 
+/**
+ * 继承的ISource的虚拟方法
+ */
 Chunk KafkaSource::generate()
 {
     auto chunk = generateImpl();

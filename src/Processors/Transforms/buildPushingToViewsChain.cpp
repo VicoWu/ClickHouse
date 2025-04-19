@@ -367,7 +367,7 @@ std::optional<Chain> generateViewChain(
             nullptr,
             insert_context,
             /* allow_materialized */ false,
-            /* no_squash */ false,
+            /* no_squash */ false, // 需要进行squash
             /* no_destination */ false,
             /* async_isnert */ false);
 
@@ -467,7 +467,9 @@ std::optional<Chain> generateViewChain(
     return out;
 }
 
-
+/**
+ * 调用者是 Chain InterpreterInsertQuery::buildSink(
+ */
 Chain buildPushingToViewsChain(
     const StoragePtr & storage,
     const StorageMetadataPtr & metadata_snapshot,

@@ -210,12 +210,19 @@ void ExecutingGraph::initializeExecution(Queue & queue, Queue & async_queue)
     }
 }
 
-
+/**
+ * 调用者是 PipelineExecutor::executeStepImpl
+ * 据某个 Processor 的执行结果更新执行图状态，并递推推进下游 Processor 状态
+* @param pid
+ * @param queue
+ * @param async_queue
+ * @return
+ */
 ExecutingGraph::UpdateNodeStatus ExecutingGraph::updateNode(uint64_t pid, Queue & queue, Queue & async_queue)
 {
     std::stack<Edge *> updated_edges;
     std::stack<uint64_t> updated_processors;
-    updated_processors.push(pid);
+    updated_processors.push(pid); // 向updated_processors中添加第一个元素
 
     std::shared_lock read_lock(nodes_mutex);
 
@@ -225,7 +232,7 @@ ExecutingGraph::UpdateNodeStatus ExecutingGraph::updateNode(uint64_t pid, Queue 
 
         if (updated_processors.empty())
         {
-            auto * edge = updated_edges.top();
+            auto * edge = updated_edges.top(); // 从栈中取出栈顶元素
             updated_edges.pop();
 
             /// Here we have ownership on edge, but node can be concurrently accessed.
@@ -233,7 +240,7 @@ ExecutingGraph::UpdateNodeStatus ExecutingGraph::updateNode(uint64_t pid, Queue 
             auto & node = *nodes[edge->to];
 
             std::unique_lock lock(node.status_mutex);
-
+            // 获取当前的执行状态。注意是执行状态ExecStatus，而不是IProcessor::Status
             ExecutingGraph::ExecStatus status = node.status;
 
             if (status != ExecutingGraph::ExecStatus::Finished)
@@ -260,7 +267,7 @@ ExecutingGraph::UpdateNodeStatus ExecutingGraph::updateNode(uint64_t pid, Queue 
             updated_processors.pop();
 
             /// In this method we have ownership on node.
-            auto & node = *nodes[pid];
+            auto & node = *nodes[pid]; // 取出对应的ExecutingGraph::Node节点
 
             bool need_expand_pipeline = false;
 
@@ -277,29 +284,43 @@ ExecutingGraph::UpdateNodeStatus ExecutingGraph::updateNode(uint64_t pid, Queue 
                 try
                 {
                     auto & processor = *node.processor;
+                    // 暂存一下执行prepare以前的状态
                     const auto last_status = node.last_processor_status;
+                    // 调用当前processor.prepare方法，收集返回状态
+                    /**
+                     * 执行图 ExecutingGraph 中每个 node 是一个 processor 节点，processor 节点之间的连接（也就是端口的连接）是通过 Edge 表示的。
+                     * 当一个 processor 的 output port 写入了数据，会导致相连的 input port 状态变化（例如 hasData() = true）,
+                     * 被连接的 processor 需要重新进入调度逻辑，进行 prepare() , 于是，ClickHouse 用 Edge 来追踪这种数据流动引起的“更新”。
+                     * 对于KafkaSource，这里调用的是 ISource::prepare()。搜索 virtual Status prepare();查看该方法的功能
+                     *
+                     */
                     IProcessor::Status status = processor.prepare(node.updated_input_ports, node.updated_output_ports);
                     node.last_processor_status = status;
                     if (status == IProcessor::Status::Finished && CurrentThread::getGroup())
                         CurrentThread::getGroup()->memory_spill_scheduler.remove(&processor);
 
-                    if (profile_processors)
+                    if (profile_processors) // profile_processors是构造ExecutingGraph的时候构造的，记录每个 Processor 的执行性能数据
                     {
-                        /// NeedData
+                        /// NeedData 如果执行prepare()以前不是NeedData，现在的状态是NeedData
                         if (last_status != IProcessor::Status::NeedData && status == IProcessor::Status::NeedData)
                         {
+                            // 重置一下等待Input的时间计数器
                             processor.input_wait_watch.restart();
                         }
+                        // 如果执行prepare()以前是NeedData，现在的状态不是NeedData
                         else if (last_status == IProcessor::Status::NeedData && status != IProcessor::Status::NeedData)
                         {
+                            // 时间统计，记录一下等待input的时间
                             processor.input_wait_elapsed_ns += processor.input_wait_watch.elapsedNanoseconds();
                         }
 
-                        /// PortFull
+                        /// PortFull 如果执行prepare()以前不是PortFull，现在是PortFull
                         if (last_status != IProcessor::Status::PortFull && status == IProcessor::Status::PortFull)
                         {
+                            // 重新计数一下 等待output_wait的时间计数器
                             processor.output_wait_watch.restart();
                         }
+                        // 如果执行prepare()以前不是PortFull，现在的状态是PortFull
                         else if (last_status == IProcessor::Status::PortFull && status != IProcessor::Status::PortFull)
                         {
                             processor.output_wait_elapsed_ns += processor.output_wait_watch.elapsedNanoseconds();
@@ -324,35 +345,40 @@ ExecutingGraph::UpdateNodeStatus ExecutingGraph::updateNode(uint64_t pid, Queue 
                     case IProcessor::Status::NeedData:
                     case IProcessor::Status::PortFull:
                     {
+                        // prepare以后的状态是NeedData或者PortFull，那么执行状态更新为Idle
                         node.status = ExecutingGraph::ExecStatus::Idle;
                         break;
                     }
                     case IProcessor::Status::Finished:
                     {
+                        // prepare以后的状态是Finished，那么执行状态更新为Finished
                         node.status = ExecutingGraph::ExecStatus::Finished;
                         break;
                     }
                     case IProcessor::Status::Ready:
                     {
+                        // 执行状态更新为执行，并且把这个ExecutingGraph::Node添加到同步队列中
                         node.status = ExecutingGraph::ExecStatus::Executing;
                         queue.push(&node);
                         break;
                     }
                     case IProcessor::Status::Async:
                     {
+                        // 异步状态，添加到async_queue中去，更新当前的执行状态为Executing
                         node.status = ExecutingGraph::ExecStatus::Executing;
                         async_queue.push(&node);
                         break;
                     }
                     case IProcessor::Status::ExpandPipeline:
                     {
+                        // 需要扩展Pipeline
                         need_expand_pipeline = true;
                         break;
                     }
                 }
 
                 if (!need_expand_pipeline)
-                {
+                {  // 不需要扩展Pipeline
                     /// If you wonder why edges are pushed in reverse order,
                     /// it is because updated_edges is a stack, and we prefer to get from stack
                     /// input ports firstly, and then outputs, both in-order.
@@ -360,40 +386,52 @@ ExecutingGraph::UpdateNodeStatus ExecutingGraph::updateNode(uint64_t pid, Queue 
                     /// Actually, there should be no difference in which order we process edges.
                     /// However, some tests are sensitive to it (e.g. something like SELECT 1 UNION ALL 2).
                     /// Let's not break this behaviour so far.
-
+                    /**
+                     * post_updated_output_ports 是当前 processor 在 prepare() 后发现有变化的 output port 对应的边（通常是下游 processor）
+                     * post_updated_input_ports 是有变化的 input port 对应的边（通常是上游 processor）
+                     * 这两组边被 push 到 updated_edges 栈中，下一轮 updateNode() 会处理它们指向的 processor。
+                     *
+                     * 因为我们希望 先处理 Input port 所连接的 Processor（也就是当前 processor 的上游），再处理下游。
+                     *
+                     * - 先去处理“谁给我提供数据了”（= 上游）
+                     * - 然后才处理“我可以把数据往哪儿送”（= 下游）
+                     */
                     for (auto it = node.post_updated_output_ports.rbegin(); it != node.post_updated_output_ports.rend(); ++it)
                     {
+                        // 把 Output 边逆序 push 进去
                         auto * edge = static_cast<ExecutingGraph::Edge *>(*it);
-                        updated_edges.push(edge);
+                        updated_edges.push(edge); // 先把Output边入栈，因此在pop的时候会后处理
                         edge->update_info.trigger();
                     }
 
                     for (auto it = node.post_updated_input_ports.rbegin(); it != node.post_updated_input_ports.rend(); ++it)
                     {
+                        // 把 Input 边逆序 push 进去
                         auto * edge = static_cast<ExecutingGraph::Edge *>(*it);
-                        updated_edges.push(edge);
+                        updated_edges.push(edge); // 然后再把input边入栈，因此在pop的时候会先处理
                         edge->update_info.trigger();
                     }
-
+                    // 已经添加到updated_edges中，下一轮updateNode()就会处理了，
+                    // 因此可以把当前node的post_updated_input_ports和post_updated_output_ports清空了
                     node.post_updated_input_ports.clear();
                     node.post_updated_output_ports.clear();
                 }
             }
 
             if (need_expand_pipeline)
-            {
+            {  // 需要扩展pipeline
                 // We do not need to upgrade lock atomically, so we can safely release shared_lock and acquire unique_lock
                 read_lock.unlock();
                 {
-                    std::unique_lock lock(nodes_mutex);
-                    auto status = expandPipeline(updated_processors, pid);
+                    std::unique_lock lock(nodes_mutex); // ExecutingGraph上全局锁，因为此时要更新整个Graph
+                    auto status = expandPipeline(updated_processors, pid); // 扩展
                     if (status != UpdateNodeStatus::Done)
                         return status;
                 }
                 read_lock.lock();
 
                 /// Add itself back to be prepared again.
-                updated_processors.push(pid);
+                updated_processors.push(pid); // 如果需要扩展pipeline，那么就往updated_processors添加节点
             }
         }
     }

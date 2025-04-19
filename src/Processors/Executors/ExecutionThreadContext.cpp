@@ -43,14 +43,21 @@ static bool checkCanAddAdditionalInfoToException(const DB::Exception & exception
            && exception.code() != ErrorCodes::QUERY_WAS_CANCELLED_BY_CLIENT;
 }
 
+/**
+ * 调用者是   ExecutionThreadContext::executeTask()
+ * 这是一个静态方法，不属于任何一个类
+ * @param node
+ * @param read_progress_callback
+ */
 static void executeJob(ExecutingGraph::Node * node, ReadProgressCallback * read_progress_callback)
 {
     try
     {
+        // 当前的Processor是否支持spill
         if (node->processor->isSpillable() && CurrentThread::getGroup())
             CurrentThread::getGroup()->memory_spill_scheduler.checkAndSpill(node->processor);
 
-        node->processor->work();
+        node->processor->work(); // 这里的IProcessor::work，比如，对于Kafka，就是调用 KafkaSource::work,实际上是 ISource::work
 
         /// Update read progress only for source nodes.
         bool is_source = node->back_edges.empty();
@@ -79,6 +86,10 @@ static void executeJob(ExecutingGraph::Node * node, ReadProgressCallback * read_
     }
 }
 
+/**
+ * 调用者是 PipelineExecutor::executeStepImpl
+ * @return
+ */
 bool ExecutionThreadContext::executeTask()
 {
     std::unique_ptr<OpenTelemetry::SpanHolder> span;
@@ -99,6 +110,14 @@ bool ExecutionThreadContext::executeTask()
 
     try
     {
+        /**
+         *
+         * 这是实质上的调用。它会调用 node->processor->prepare() 并根据返回的状态调用：
+         *  work()：处理数据
+         *  generate()：对 source 来说（如 KafkaSource）
+         *  consume()：对 sink 来说（如 materialized view 的 insert sink）
+         */
+
         executeJob(node, read_progress_callback);
         ++node->num_executed_jobs;
     }
