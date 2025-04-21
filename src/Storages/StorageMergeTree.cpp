@@ -2579,9 +2579,11 @@ void StorageMergeTree::backupData(BackupEntriesCollector & backup_entries_collec
     Int64 min_data_version = std::numeric_limits<Int64>::max();
     for (const auto & data_part : data_parts)
         min_data_version = std::min(min_data_version, data_part->info.getDataVersion() + 1);
-
+    /**
+     * 返回一个 std::vector<PartBackupEntries>，每一个PartBackupEntries代表一个part和这个part里面的多个entry
+     */
     auto parts_backup_entries = backupParts(data_parts, data_path_in_backup, backup_settings, local_context);
-    for (auto & part_backup_entries : parts_backup_entries)
+    for (auto & part_backup_entries : parts_backup_entries) // 遍历每一个part，把这个part中的entry全部添加给对应的BackupEntriesCollector
         backup_entries_collector.addBackupEntries(std::move(part_backup_entries.backup_entries));
 
     backup_entries_collector.addBackupEntries(backupMutations(min_data_version, data_path_in_backup));

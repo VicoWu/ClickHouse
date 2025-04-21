@@ -5791,6 +5791,9 @@ Pipe MergeTreeData::alterPartition(
     return {};
 }
 
+/**
+ * 返回一个 std::vector<PartBackupEntries>
+ */
 MergeTreeData::PartsBackupEntries MergeTreeData::backupParts(
     const DataPartsVector & data_parts,
     const String & data_path_in_backup,

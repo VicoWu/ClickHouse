@@ -88,16 +88,33 @@ ThreadStatusesHolder::~ThreadStatusesHolder()
     }
 }
 
+/**
+ * ClickHouse 中 buildPushingToViewsChain 所依赖的一个核心数据结构 —— ViewsData。
+ * 它主要用来封装多个 Materialized View 写入过程中的上下文信息和状态。
+ */
 struct ViewsData
 {
     /// A separate holder for thread statuses, needed for proper destruction order.
+    /**
+     * 持有所有子线程的 ThreadStatus 对象，目的是为了确保 在所有线程销毁后再销毁 pipeline 相关资源。
+     * 每个 view 可能在自己的线程中执行，因此需要统一的 holder 管理这些状态。
+     */
     ThreadStatusesHolderPtr thread_status_holder;
     /// Separate information for every view.
+    /**
+     * 一个列表，保存了每个 View 的运行时信息。
+     * view 的名字
+     * 目标表的 sink 信息
+     * 执行时统计数据
+     * pipeline input/output 端口等
+     */
     std::list<ViewRuntimeData> views;
     /// Some common info about source storage.
     ContextPtr context;
+    // 最初执行 insert 的那张表，通常是 Kafka 表。
     StorageID source_storage_id;
     StorageMetadataPtr source_metadata_snapshot;
+    // Kafka 表的 Storage 对象，用于处理插入时的某些行为。
     StoragePtr source_storage;
     size_t max_threads = 1;
 
@@ -223,6 +240,10 @@ private:
     std::exception_ptr any_exception;
 };
 
+/**
+ * 为某个物化视图 view_id 构造一个处理链 Chain，这个链最终会把插入的数据送入物化视图背后的表。
+ * 调用者是 Chain buildPushingToViewsChain(
+ */
 /// Generates one chain part for every view in buildPushingToViewsChain
 std::optional<Chain> generateViewChain(
     ContextPtr context,
@@ -243,7 +264,7 @@ std::optional<Chain> generateViewChain(
             getLogger("PushingToViews"), "Trying to access table {} but it doesn't exist", view_id.getFullTableName());
         return std::nullopt;
     }
-
+    // 从DatabaseCatalog::instance()中获取到的View信息
     auto view_metadata_snapshot = view->getInMemoryMetadataPtr();
     auto select_context = view_metadata_snapshot->getSQLSecurityOverriddenContext(context);
     select_context->setQueryAccessInfo(context->getQueryAccessInfoPtr());
@@ -278,9 +299,11 @@ std::optional<Chain> generateViewChain(
     auto * original_thread = current_thread;
     SCOPE_EXIT({ current_thread = original_thread; });
     current_thread = nullptr;
+    // 每个视图有自己专属的 ThreadStatus，用于记录自己的性能和异常
     std::unique_ptr<ThreadStatus> view_thread_status_ptr = std::make_unique<ThreadStatus>(/*check_current_thread_on_destruction=*/ false);
     /// Copy of a ThreadStatus should be internal.
     view_thread_status_ptr->setInternalThread();
+    // 视图会加入到主线程组中（父插入语句）
     view_thread_status_ptr->attachToGroup(running_group);
 
     auto * view_thread_status = view_thread_status_ptr.get();
@@ -295,9 +318,10 @@ std::optional<Chain> generateViewChain(
     auto & type = runtime_stats->type;
     auto & target_name = runtime_stats->target_name;
     auto * view_counter_ms = &runtime_stats->elapsed_ms;
-
+    // 如果是Kafka -> mv -> MergeTree的这种 StorageMaterializedView
     if (auto * materialized_view = dynamic_cast<StorageMaterializedView *>(view.get()))
     {
+        // 对物化视图本身加读锁
         auto lock = materialized_view->tryLockForShare(context->getInitialQueryId(), context->getSettingsRef()[Setting::lock_acquire_timeout]);
 
         if (lock == nullptr)
@@ -311,7 +335,7 @@ std::optional<Chain> generateViewChain(
 
         type = QueryViewsLogElement::ViewType::MATERIALIZED;
         result_chain.addTableLock(lock);
-
+        // 获取视图背后的物理表（一般是 MergeTree 表，也有可能还是MV表等）
         StoragePtr inner_table = materialized_view->tryGetTargetTable();
         /// If target table was dropped, ignore this materialized view.
         if (!inner_table)
@@ -329,10 +353,12 @@ std::optional<Chain> generateViewChain(
 
         auto inner_table_id = inner_table->getStorageID();
         auto inner_metadata_snapshot = inner_table->getInMemoryMetadataPtr();
-
+        // 从DatabaseCatalog::instance()中获取到的View信息保存在select_query中
         const auto & select_query = view_metadata_snapshot->getSelectQuery();
+        // 防止视图逻辑已经被改写，不再以当前表为来源。例如用户 ALTER 了视图。
         if (select_query.select_table_id != views_data->source_storage_id)
         {
+            // 从DatabaseCatalog::instance()中获取到的View信息已经过时，目前最新的source table信息是 views_data->source_storage_id
             /// It may happen if materialize view query was changed and it doesn't depend on this source table anymore.
             /// See setting `allow_experimental_alter_materialized_view_structure`
             LOG_DEBUG(
@@ -340,9 +366,9 @@ std::optional<Chain> generateViewChain(
                 select_query.select_table_id.getFullTableName(), view_id.getFullTableName(), views_data->source_storage_id);
             return std::nullopt;
         }
-
+        // 查询(来自Kafka表)
         query = select_query.inner_query;
-
+        // 目标表(来自MergeTreeTable)
         target_name = inner_table_id.getFullTableName();
 
         Block header;
@@ -368,18 +394,20 @@ std::optional<Chain> generateViewChain(
             insert_context,
             /* allow_materialized */ false,
             /* no_squash */ false, // 需要进行squash
-            /* no_destination */ false,
-            /* async_isnert */ false);
+            /* no_destination */ false, //  有dest
+            /* async_isnert */ false); //  不是 async_insert
 
         /// TODO: remove sql_security_type check after we turn `ignore_empty_sql_security_in_create_view_query=false`
         bool check_access = !materialized_view->hasInnerTable() && materialized_view->getInMemoryMetadataPtr()->sql_security_type;
+        // 查看方法 InterpreterInsertQuery::buildChain，返回一个chain
+        // 这里的inner_table是当前的mv表的目标表，它可能是一个local表，也可能还是一个mv表，如果是一个mv表，那么显然会继续递归调用
         out = interpreter.buildChain(inner_table, view_level + 1, inner_metadata_snapshot, insert_columns, thread_status_holder, view_counter_ms, check_access);
 
         if (interpreter.shouldAddSquashingForStorage(inner_table))
         {
             bool table_prefers_large_blocks = inner_table->prefersLargeBlocks();
             const auto & settings = insert_context->getSettingsRef();
-
+            // 将这个Processor添加到这个Chain的头部，作为这个Chain的第一个Processor
             out.addSource(std::make_shared<SquashingTransform>(
                 out.getInputHeader(),
                 table_prefers_large_blocks ? settings[Setting::min_insert_block_size_rows] : settings[Setting::max_block_size],
@@ -398,7 +426,7 @@ std::optional<Chain> generateViewChain(
         out.addStorageHolder(view);
         out.addStorageHolder(inner_table);
     }
-    else if (auto * live_view = dynamic_cast<StorageLiveView *>(view.get()))
+    else if (auto * live_view = dynamic_cast<StorageLiveView *>(view.get())) // 如果是StorageLiveView
     {
         runtime_stats->type = QueryViewsLogElement::ViewType::LIVE;
         query = live_view->getInnerQuery();
@@ -408,7 +436,7 @@ std::optional<Chain> generateViewChain(
             /* no_destination= */ true,
             thread_status_holder, running_group, view_counter_ms, async_insert, storage_header);
     }
-    else if (auto * window_view = dynamic_cast<StorageWindowView *>(view.get()))
+    else if (auto * window_view = dynamic_cast<StorageWindowView *>(view.get())) // 如果是StorageWindowView
     {
         runtime_stats->type = QueryViewsLogElement::ViewType::WINDOW;
         query = window_view->getMergeableQuery();
@@ -425,6 +453,7 @@ std::optional<Chain> generateViewChain(
             /* no_destination= */ false,
             thread_status_holder, running_group, view_counter_ms, async_insert);
 
+    // 向ViewData的views中插入ViewRuntimeData
     views_data->views.emplace_back(ViewRuntimeData{
         std::move(query),
         out.getInputHeader(),
@@ -469,13 +498,14 @@ std::optional<Chain> generateViewChain(
 
 /**
  * 调用者是 Chain InterpreterInsertQuery::buildSink(
+ * 把 Kafka 表“虚拟 insert”操作，通过中间的 materialized views 转化为写入目标表的执行链。
  */
 Chain buildPushingToViewsChain(
-    const StoragePtr & storage,
+    const StoragePtr & storage, // 对应的kafka表
     const StorageMetadataPtr & metadata_snapshot,
     ContextPtr context,
     const ASTPtr & query_ptr,
-    size_t view_level,
+    size_t view_level, // 在 Chain InterpreterInsertQuery::buildSink(中调用的时候，view_level是0
     bool no_destination,
     ThreadStatusesHolderPtr thread_status_holder,
     ThreadGroupPtr running_group,
@@ -486,7 +516,7 @@ Chain buildPushingToViewsChain(
 {
     checkStackSize();
     Chain result_chain;
-
+    // 用于后续追踪和记录执行线程的状态和资源
     ThreadStatus * thread_status = current_thread;
 
     if (!thread_status_holder)
@@ -507,8 +537,9 @@ Chain buildPushingToViewsChain(
     result_chain.addTableLock(storage->lockForShare(context->getInitialQueryId(), context->getSettingsRef()[Setting::lock_acquire_timeout]));
 
     bool disable_deduplication_for_children = !context->getSettingsRef()[Setting::deduplicate_blocks_in_dependent_materialized_views];
-
+    // 获取对应的kafka表的table id
     auto table_id = storage->getStorageID();
+    // 或者一张Kafka表所依赖的所有的view，可能有多个
     auto views = DatabaseCatalog::instance().getDependentViews(table_id);
 
     auto log = getLogger("buildPushingToViewsChain");
@@ -523,12 +554,17 @@ Chain buildPushingToViewsChain(
         auto process_context = Context::createCopy(context);  /// This context will be used in `process` function
         views_data = std::make_shared<ViewsData>(thread_status_holder, process_context, table_id, metadata_snapshot, storage);
     }
-
+    // 为每一个View构造一个独立的Chain，形成一个vector<Chain> chains
     std::vector<Chain> chains;
     for (const auto & view_id : views)
     {
         try
         {
+            /**
+             * 每个 View 会构造一个独立的 Chain： 每个 Chain 包含：filter -> projection -> sink 等变换步骤
+               最终 sink 通常是写入 ReplicatedMergeTree
+               执行过程中会往ViewsData中插入对应View的ViewRuntimeData
+             */
             auto out = generateViewChain(
                 context, view_level, view_id, running_group, result_chain,
                 views_data, thread_status_holder, async_insert, storage_header, disable_deduplication_for_children);
@@ -558,8 +594,31 @@ Chain buildPushingToViewsChain(
         }
     }
 
+
+    /**
+     * +---------------------+
+       |                     |
+       | CopyingDataTransform|  <- 把数据复制给多个视图的入口
+       |                     |
+       +---------------------+
+                 |
+       +---------------+-----------------+-------------+
+       |               |                 |             |
+   +---------+     +---------+       +---------+     +---------+
+   | View A  |     | View B  |  ...  | View N  |     (多个视图，每个一个 Chain)
+   +---------+     +---------+       +---------+
+       |               |                 |
+       +---------------+-----------------+-------------+
+                 |
+       +----------------------+
+       | FinalizingViewsTransf|  <- 收集每个视图的运行状态/错误
+       +----------------------+
+
+     */
+    // 只要有一个view存在
     if (views_data && !views_data->views.empty())
     {
+        // view的数量
         size_t num_views = views_data->views.size();
         const Settings & settings = context->getSettingsRef();
         if (settings[Setting::parallel_view_processing])
@@ -569,30 +628,34 @@ Chain buildPushingToViewsChain(
         headers.reserve(num_views);
         for (const auto & chain : chains)
             headers.push_back(chain.getOutputHeader());
-
+        /**
+         * 这一步把所有子视图链收敛到一起，形成一个总的 chain。
+         * copying_data放在最前面，finalizing_views放在最后面，每一个View对应的chain放在中间
+         */
         auto copying_data = std::make_shared<CopyingDataToViewsTransform>(storage_header, views_data, view_level);
         auto finalizing_views = std::make_shared<FinalizingViewsTransform>(std::move(headers), views_data);
-        auto out = copying_data->getOutputs().begin();
-        auto in = finalizing_views->getInputs().begin();
+        auto out = copying_data->getOutputs().begin();// copying_data的output会重复输出给所有的views_data
+        auto in = finalizing_views->getInputs().begin(); // 所有views_data的view的output会集中给finalizing_views的每一个view，由finalizing_views进行汇总
 
         size_t max_parallel_streams = 0;
 
         std::list<ProcessorPtr> processors;
-
+        // 遍历每一个view对应的chain
         for (auto & chain : chains)
         {
             max_parallel_streams += std::max<size_t>(chain.getNumThreads(), 1);
             result_chain.attachResources(chain.detachResources());
             connect(*out, chain.getInputPort());
             connect(chain.getOutputPort(), *in);
-            ++in;
-            ++out;
+            ++in; // finalizing_views的下一个input，切换到下一个view
+            ++out; // copying_data的下一个output，切换到下一个view
+            // 把每个 chain 中的所有 Processor，从它内部拿出来，然后拼接到我们总的 processors 列表的末尾。
             processors.splice(processors.end(), Chain::getProcessors(std::move(chain)));
         }
 
         processors.emplace_front(std::move(copying_data));
         processors.emplace_back(std::move(finalizing_views));
-        result_chain = Chain(std::move(processors));
+        result_chain = Chain(std::move(processors)); // 遍历完了所有的processors，把这些Processor组成一个最终的Chain
         result_chain.setNumThreads(std::min(views_data->max_threads, max_parallel_streams));
         result_chain.setConcurrencyControl(settings[Setting::use_concurrency_control]);
     }
@@ -615,6 +678,7 @@ Chain buildPushingToViewsChain(
     }
     else if (dynamic_cast<StorageMaterializedView *>(storage.get()))
     {
+        // 只有当这个 storage 真正指向的是一个 StorageMaterializedView 实例时，转换才会成功。
         auto sink = storage->write(query_ptr, metadata_snapshot, context, async_insert);
         metadata_snapshot->check(sink->getHeader().getColumnsWithTypeAndName());
         sink->setRuntimeData(thread_status, elapsed_counter_ms);
@@ -623,7 +687,7 @@ Chain buildPushingToViewsChain(
         result_chain.addSource(std::make_shared<DeduplicationToken::DefineSourceWithChunkHashTransform>(result_chain.getInputHeader()));
     }
     /// Do not push to destination table if the flag is set
-    else if (!no_destination)
+    else if (!no_destination) // 如果  no_destination = false
     {
         auto sink = storage->write(query_ptr, metadata_snapshot, context, async_insert);
         metadata_snapshot->check(sink->getHeader().getColumnsWithTypeAndName());
@@ -634,7 +698,7 @@ Chain buildPushingToViewsChain(
         result_chain.addSource(std::move(sink));
     }
     else
-    {
+    { // no_destination = true
         result_chain.addSource(std::make_shared<DeduplicationToken::DefineSourceWithChunkHashTransform>(storage_header));
     }
 

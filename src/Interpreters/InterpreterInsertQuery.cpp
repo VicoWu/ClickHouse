@@ -337,20 +337,19 @@ Chain InterpreterInsertQuery::buildChain(
 
     Chain sink = buildSink(table, view_level, metadata_snapshot, thread_status_holder, running_group, elapsed_counter_ms);
     Chain chain = buildPreSinkChain(sink.getInputHeader(), table, metadata_snapshot, sample);
-
+    // 量sinkti按加到chain的尾部
     chain.appendChain(std::move(sink));
     return chain;
 }
 
 /**
- * 调用者是 InterpreterInsertQuery::buildPreAndSinkChains
+ * 调用者是 InterpreterInsertQuery::buildPreAndSinkChains，这是sink chain的一部分
  * 构建数据插入的终端处理链（Sink Chain），也就是将数据写入目标表或者通过 Materialized View 传递到其他表的逻辑。
     数据源 → 预处理 → sink（写入表）
                         ↘（也可能触发 materialized views）
    这个 buildSink 就是构建“写入表”的部分，有两种可能路径：
      ✅ 直接插入目标表（如普通的 MergeTree 表）
      🔁 通过 Materialized View 转发，插入对应的目标表
-
  *
  * @param table
  * @param view_level
@@ -389,17 +388,37 @@ Chain InterpreterInsertQuery::buildSink(
         sink->setRuntimeData(thread_status, elapsed_counter_ms);
         out.addSource(std::move(sink));
     }
-    else
-    {   // 走 Materialized View 的处理链
+    else // 如果这个Kafka表有对应的pushingToView，那么就走pushingToView
+    {   // 走 Materialized View 的处理链，这里的table是对应的kafka表
         // 它会遍历与该表绑定的所有 Materialized View，并为每个生成一个子 chain
+        // 搜索 Chain buildPushingToViewsChain( 查看具体实现。
+        // 在StorageKafka::streamToViews()中构造 InterpreterInsertQuery 的时候， no_destination = true
+        // 在 底层的std::optional<Chain> generateViewChain中构造InterpreterInsertQuery的时候， no_destination = false
         out = buildPushingToViewsChain(table, metadata_snapshot, context_ptr,
-            query_ptr, view_level, no_destination,
+            query_ptr/*这个kafka表对应的query*/, view_level, no_destination,
             thread_status_holder, running_group, elapsed_counter_ms, async_insert);
     }
 
     return out;
 }
 
+/**
+ * 判断当前插入操作是否**应该为目标表添加 squashing（数据块合并）**逻辑
+ * !(settings[Setting::distributed_foreground_insert] && table->isRemote())
+ *
+ * 如果当前设置了 foreground insert into Distributed table（即：在客户端同步往 Distributed 表插入），而且目标表是远程表（isRemote()），那么就不要加 squash，否则容易造成 双重缓冲。
+
+“缓冲”问题：客户端已经做了一次 block 合并（buffer），如果 ClickHouse 服务器端再来一次，容易增加延迟，导致超时（尤其是数据量大的时候）
+
+    ② !async_insert
+    如果是 异步插入（async insert），也不要添加 squashing。因为异步 insert 的逻辑会自己进行缓冲。
+
+    ③ !no_squash
+        如果 InterpreterInsertQuery 被显式配置为 no_squash = true，那就不能加 squashing（比如某些特殊用途如测试、debug、或者链条中某些位置不希望再次 merge block）。
+
+ * @param table 待插入数据的目标表
+ * @return
+ */
 bool InterpreterInsertQuery::shouldAddSquashingForStorage(const StoragePtr & table) const
 {
     auto context_ptr = getContext();
@@ -410,9 +429,17 @@ bool InterpreterInsertQuery::shouldAddSquashingForStorage(const StoragePtr & tab
     return !(settings[Setting::distributed_foreground_insert] && table->isRemote()) && !async_insert && !no_squash;
 }
 
+/**
+ * sink chain以前的校验工作
+ * @param subsequent_header
+ * @param table
+ * @param metadata_snapshot
+ * @param query_sample_block
+ * @return
+ */
 Chain InterpreterInsertQuery::buildPreSinkChain(
     const Block & subsequent_header,
-    const StoragePtr & table,
+    const StoragePtr & table, // 对应的kafka表
     const StorageMetadataPtr & metadata_snapshot,
     const Block & query_sample_block)
 {
@@ -438,6 +465,8 @@ Chain InterpreterInsertQuery::buildPreSinkChain(
     /// We have to make this assertion before writing to table, because storage engine may assume that they have equal sizes.
     /// NOTE It'd better to do this check in serialization of nested structures (in place when this assumption is required),
     /// but currently we don't have methods for serialization of nested structures "as a whole".
+    // 用于校验嵌套结构（如 Array）的子字段是否长度一致。例如：
+    // INSERT INTO table_nested (a.x, a.y) VALUES ([1, 2], [10])  -- 会报错
     out.addSource(std::make_shared<NestedElementsValidationTransform>(input_header()));
 
     /// Checking constraints. It must be done after calculation of all defaults, so we can check them on calculated columns.
@@ -445,6 +474,7 @@ Chain InterpreterInsertQuery::buildPreSinkChain(
     /// Add implicit sign constraint for Collapsing and VersionedCollapsing tables.
     auto constraints = metadata_snapshot->getConstraints();
     auto storage_merge_tree = std::dynamic_pointer_cast<MergeTreeData>(table);
+    //对Collapsing或者VersionedCollapsing MergeTree的特殊处理，忽略
     if (storage_merge_tree
         && (storage_merge_tree->merging_params.mode == MergeTreeData::MergingParams::Collapsing
             || storage_merge_tree->merging_params.mode == MergeTreeData::MergingParams::VersionedCollapsing)
@@ -466,23 +496,24 @@ Chain InterpreterInsertQuery::buildPreSinkChain(
         constraints_ast.push_back(std::move(sign_column_check_constraint));
         constraints = ConstraintsDescription(constraints_ast);
     }
-
+    // 显式约束检查（CheckConstraintsTransform）
     if (!constraints.empty())
         out.addSource(std::make_shared<CheckConstraintsTransform>(
             table->getStorageID(), input_header(), constraints, context_ptr));
-
+    // addMissingDefaults 负责对未提供的列填补默认值（如 a Int32 DEFAULT 42）
     auto adding_missing_defaults_dag = addMissingDefaults(
         query_sample_block,
         input_header().getNamesAndTypesList(),
         metadata_snapshot->getColumns(),
         context_ptr,
         null_as_default);
-
+    // extracting_subcolumns 处理 Tuple 或 Nested 类型的子列提取（如 t.x 从 Tuple(x Int, y Int) 中提取）
     auto extracting_subcolumns_dag = createSubcolumnsExtractionActions(query_sample_block, adding_missing_defaults_dag.getRequiredColumnsNames(), context_ptr);
     auto adding_missing_defaults_actions = std::make_shared<ExpressionActions>(ActionsDAG::merge(std::move(extracting_subcolumns_dag), std::move(adding_missing_defaults_dag)));
 
     /// Actually we don't know structure of input blocks from query/table,
     /// because some clients break insertion protocol (columns != header)
+    // 最后转成 ExpressionActions，并用 ConvertingTransform 统一应用：
     out.addSource(std::make_shared<ConvertingTransform>(query_sample_block, adding_missing_defaults_actions));
 
     return out;
@@ -492,18 +523,19 @@ Chain InterpreterInsertQuery::buildPreSinkChain(
  *  构建用于插入数据的两部分处理链：
     - PreSinkChain（预处理链）：插入前的数据转换逻辑，比如 MaterializedView 的 SELECT 部分。
     - SinkChain（写入链）：最终将数据写入目标存储（如主表或物化视图目标表）的逻辑。
+    调用者是  InterpreterInsertQuery::buildInsertPipeline
  * @param presink_streams
  * @param sink_streams
  * @param table
  * @param view_level
  * @param metadata_snapshot
  * @param query_sample_block
- * @return
+ * @return 返回一个pre-sink chain和一个sink chain
  */
 std::pair<std::vector<Chain>, std::vector<Chain>> InterpreterInsertQuery::buildPreAndSinkChains(
-    size_t presink_streams,
+    size_t presink_streams, //  InterpreterInsertQuery::buildInsertPipeline中调用的时候， presink_streams和sink_streams都是1
     size_t sink_streams,
-    StoragePtr table,
+    StoragePtr table, // 如果是kafka表，那么view_level = 0
     size_t view_level,
     const StorageMetadataPtr & metadata_snapshot,
     const Block & query_sample_block)
@@ -519,15 +551,16 @@ std::pair<std::vector<Chain>, std::vector<Chain>> InterpreterInsertQuery::buildP
 
     std::vector<Chain> sink_chains;
     std::vector<Chain> presink_chains;
-
+    // 构建Sink Chain。这个sink_streams可能多于一个，那么就构造多个相同的但是独立的chain，每个stream一个独立的chain
     for (size_t i = 0; i < sink_streams; ++i)
     {
+        // 这里会调用 buildPushingToViewsChain
         auto out = buildSink(table, view_level, metadata_snapshot, /* thread_status_holder= */ nullptr,
             running_group, /* elapsed_counter_ms= */ nullptr);
 
         sink_chains.emplace_back(std::move(out));
     }
-
+    // 构建PreSink Chain， 这个presink_streams可能多于一个，那么就构造多个相同的但是独立的chain，每个stream一个独立的chain
     for (size_t i = 0; i < presink_streams; ++i)
     {
         auto out = buildPreSinkChain(sink_chains[0].getInputHeader(), table, metadata_snapshot, query_sample_block);
@@ -765,9 +798,9 @@ QueryPipeline InterpreterInsertQuery::buildInsertSelectPipeline(ASTInsertQuery &
 
 /**
  * 调用者是 InterpreterInsertQuery::execute()
- * 为一条 INSERT 查询构造一个数据处理的 QueryPipeline（查询管道）。
+ * 为一条 INSERT 查询构造一个数据处理的 QueryPipeline（查询管道）,一个QueryPipeline是由对应的Chain组恒的
  * @param query
- * @param table
+ * @param table 对应的Kafka表
  * @return
  */
 QueryPipeline InterpreterInsertQuery::buildInsertPipeline(ASTInsertQuery & query, StoragePtr table)
@@ -780,10 +813,13 @@ QueryPipeline InterpreterInsertQuery::buildInsertPipeline(ASTInsertQuery & query
     Chain chain;
 
     {
+        // 建数据插入的终端处理链（Sink Chain和Presink_Chains），也就是将数据写入目标表或者通过 Materialized View 传递到其他表的逻辑
+        // 由于是InsertPipeline，presink_streams和sink_streams都只有一个
         auto [presink_chains, sink_chains] = buildPreAndSinkChains(
             /* presink_streams */1, /* sink_streams */1,
             table, /* view_level */ 0, metadata_snapshot, query_sample_block);
 
+        // 把 presink_chains放在前面，把sink_chains放在后面
         chain = std::move(presink_chains.front());
         chain.appendChain(std::move(sink_chains.front()));
     }
@@ -821,7 +857,7 @@ QueryPipeline InterpreterInsertQuery::buildInsertPipeline(ASTInsertQuery & query
     counting->setProcessListElement(context_ptr->getProcessListElement());
     counting->setProgressCallback(context_ptr->getProgressCallback());
     chain.addSource(std::move(counting));
-
+    // 根据生成的chain，构造对应的QueryPipeline
     QueryPipeline pipeline = QueryPipeline(std::move(chain));
 
     pipeline.setNumThreads(std::min<size_t>(pipeline.getNumThreads(), settings[Setting::max_threads]));
@@ -858,7 +894,7 @@ BlockIO InterpreterInsertQuery::execute()
         && query.table_id.database_name != DatabaseCatalog::SYSTEM_DATABASE)
         throw Exception(ErrorCodes::QUERY_IS_PROHIBITED, "Insert queries are prohibited");
 
-    StoragePtr table = getTable(query);
+    StoragePtr table = getTable(query); // 在bool StorageKafka::streamToViews()中调用的时候，table就是对应的kafka表
     checkStorageSupportsTransactionsIfNeeded(table, getContext());
 
     if (query.partition_by && !table->supportsPartitionBy())
@@ -874,7 +910,7 @@ BlockIO InterpreterInsertQuery::execute()
     if (!query.table_function)
         getContext()->checkAccess(AccessType::INSERT, query.table_id, query_sample_block.getNames());
 
-    if (!allow_materialized)
+    if (!allow_materialized) // allow_materialized =  false
     {
         for (const auto & column : metadata_snapshot->getColumns())
             if (column.default_desc.kind == ColumnDefaultKind::Materialized && query_sample_block.has(column.name))

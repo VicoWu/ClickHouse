@@ -607,6 +607,11 @@ bool StorageKafka::streamToViews()
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Engine table {} doesn't exist.", table_id.getNameForLogs());
 
     CurrentMetrics::Increment metric_increment{CurrentMetrics::KafkaBackgroundReads};
+    /**
+     * 配置	KafkaBackgroundReads 的含义
+        kafka_thread_per_consumer = 1	每个 consumer 都有自己的线程，每次线程执行一次streamToViews()流处理就 +1（即一个 consumer 调用一次 streamToViews()）
+        kafka_thread_per_consumer = 0	所有 consumer 共用一个线程，线程每轮批量消费所有 consumer（执行一次streamToViews()），也只 +1（即一轮处理所有 consumer 只记一次）
+     */
     ProfileEvents::increment(ProfileEvents::KafkaBackgroundReads);
 
     auto storage_snapshot = getStorageSnapshot(getInMemoryMetadataPtr(), getContext());
@@ -633,7 +638,7 @@ bool StorageKafka::streamToViews()
         /* async_insert */ false);
     // 注意这里的 execute() 实际上内部会走到 buildInsertPipeline()，这个函数本身会根据 no_destination = true 走不同逻辑，
     // 它不会往主表写数据，只是拿到 数据应该写成什么格式的 header。
-    auto block_io = interpreter.execute();
+    auto block_io = interpreter.execute(); // InterpreterInsertQuery::execute
 
     // Create a stream for each consumer and join them in a union stream
     std::vector<std::shared_ptr<KafkaSource>> sources;

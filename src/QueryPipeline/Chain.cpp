@@ -80,6 +80,10 @@ Chain::Chain(std::list<ProcessorPtr> processors_) : processors(std::move(process
     }
 }
 
+/**
+ * 将这个Processor添加到这个Chain的头部，作为这个Chain的第一个Processor
+ * @param processor
+ */
 void Chain::addSource(ProcessorPtr processor)
 {
     checkTransform(*processor);
@@ -90,21 +94,35 @@ void Chain::addSource(ProcessorPtr processor)
     processors.emplace_front(std::move(processor));
 }
 
+/**
+ * 将这个Processor添加到这个Chain的尾部，作为这个Chain的最后一个Processor
+ * @param processor
+ */
 void Chain::addSink(ProcessorPtr processor)
 {
     checkTransform(*processor);
 
-    if (!processors.empty())
+    if (!processors.empty()) // 将当前chain的output和新的processor的input连接起来
         connect(getOutputPort(), processor->getInputs().front());
 
     processors.emplace_back(std::move(processor));
 }
 
+/**
+ *  Chain 类的一个成员函数，用于将一个链（Chain）追加到当前链的尾部，形成一个更长的处理链。
+ *  这个在构建物化视图处理流程或 insert 查询处理时经常用到。
+ * @param chain
+ */
 void Chain::appendChain(Chain chain)
 {
+    // 将当前chain的OutputPort连接到新的chain的InputPort
     connect(getOutputPort(), chain.getInputPort());
+    // 把 chain 中的所有处理器 processors 移动到当前链的 processors 列表尾部。
+    // std::move 表示把资源“拿走”，chain 自己的 processors 就被清空了。
     processors.splice(processors.end(), std::move(chain.processors));
+    // 从 chain 中分离出它的资源管理器（比如表的引用、context 持有等），并添加到当前链中。
     attachResources(chain.detachResources());
+    // 把 chain 的线程数加进当前链的线程数。每个 Chain 可以使用一定数量的线程来执行任务；拼接后线程数是总和。
     num_threads += chain.num_threads;
 }
 

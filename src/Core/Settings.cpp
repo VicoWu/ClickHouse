@@ -1800,7 +1800,7 @@ Possible values:
 - Positive integer.
 )", 0) \
     DECLARE(Milliseconds, read_backoff_min_latency_ms, 1000, R"(
-Setting to reduce the number of threads in case of slow reads. Pay attention only to reads that took at least that much time.
+Setting to reduce the number of threads in case of slow reads. Pay a only to reads that took at least that much time.ttention
 )", 0) \
     DECLARE(UInt64, read_backoff_max_throughput, 1048576, R"(
 Settings to reduce the number of threads in case of slow reads. Count events when the read bandwidth is less than that many bytes per second.
