@@ -49,6 +49,7 @@
 #include <Common/checkStackSize.h>
 #include <Common/ProfileEvents.h>
 #include "base/defines.h"
+#include <Common/StackTrace.h>
 
 
 namespace ProfileEvents
@@ -334,7 +335,13 @@ Chain InterpreterInsertQuery::buildChain(
     auto sample = getSampleBlockImpl(columns, table, metadata_snapshot, no_destination, allow_materialized);
     if (check_access)
         getContext()->checkAccess(AccessType::INSERT, table->getStorageID(), sample.getNames());
-
+    LOG_DEBUG(getLogger("InterpreterInsertQuery::buildChain"), "Building the chain with "
+                                                               "view_level {} for table {} with full name {}, "
+                                                               "no_destination {}, async_insert {}, no_squash {}, "
+                                                               "no_destination {} , is remote {}", view_level,
+              table->getName(),
+              table->getStorageID().getFullTableName(),
+              no_destination, async_insert, no_squash, no_destination, table->isRemote());
     Chain sink = buildSink(table, view_level, metadata_snapshot, thread_status_holder, running_group, elapsed_counter_ms);
     Chain chain = buildPreSinkChain(sink.getInputHeader(), table, metadata_snapshot, sample);
     // 量sinkti按加到chain的尾部
@@ -345,19 +352,11 @@ Chain InterpreterInsertQuery::buildChain(
 /**
  * 调用者是 InterpreterInsertQuery::buildPreAndSinkChains，这是sink chain的一部分
  * 构建数据插入的终端处理链（Sink Chain），也就是将数据写入目标表或者通过 Materialized View 传递到其他表的逻辑。
-    数据源 → 预处理 → sink（写入表）
-                        ↘（也可能触发 materialized views）
-   这个 buildSink 就是构建“写入表”的部分，有两种可能路径：
-     ✅ 直接插入目标表（如普通的 MergeTree 表）
-     🔁 通过 Materialized View 转发，插入对应的目标表
- *
- * @param table
- * @param view_level
- * @param metadata_snapshot
- * @param thread_status_holder
- * @param running_group
- * @param elapsed_counter_ms
- * @return
+ *   数据源 → 预处理 → sink（写入表）
+ *                       ↘（也可能触发 materialized views）
+ *  这个 buildSink 就是构建“写入表”的部分，有两种可能路径：
+ *    ✅ 直接插入目标表（如普通的 MergeTree 表）
+ *    🔁 通过 Materialized View 转发，插入对应的目标表
  */
 Chain InterpreterInsertQuery::buildSink(
     const StoragePtr & table,
@@ -382,6 +381,13 @@ Chain InterpreterInsertQuery::buildSink(
     /// NOTE: we explicitly ignore bound materialized views when inserting into Kafka Storage.
     ///       Otherwise we'll get duplicates when MV reads same rows again from Kafka.
     // 判断是否可以直接插入表（跳过 Materialized View）
+    LOG_DEBUG(getLogger("InterpreterInsertQuery"), "Running InterpreterInsertQuery::buildSink, noPushingToViews {}, "
+                                                   "no_destination {}, async_insert {} , "
+                                                   "no_squash {}, no_destination {}, table {}, "
+                                                   "full name {} , is remote {}, view_level {}",
+              table->noPushingToViews(), no_destination, async_insert,
+              no_squash, no_destination, table->getName(),
+              table->getStorageID().getFullTableName(), table->isRemote(), view_level);
     if (table->noPushingToViews() && !no_destination)
     {
         auto sink = table->write(query_ptr, metadata_snapshot, context_ptr, async_insert);
@@ -394,6 +400,9 @@ Chain InterpreterInsertQuery::buildSink(
         // 搜索 Chain buildPushingToViewsChain( 查看具体实现。
         // 在StorageKafka::streamToViews()中构造 InterpreterInsertQuery 的时候， no_destination = true
         // 在 底层的std::optional<Chain> generateViewChain中构造InterpreterInsertQuery的时候， no_destination = false
+        LOG_DEBUG(getLogger("InterpreterInsertQuery"), "Running InterpreterInsertQuery::buildSink, table {}, viewLevel : {}, "
+                                                       "no_destination {}, async_insert {}, no_squash {}, no_destination {} , is remote {}",
+                 table->getName(),  view_level, no_destination, async_insert, no_squash, no_destination, table->isRemote());
         out = buildPushingToViewsChain(table, metadata_snapshot, context_ptr,
             query_ptr/*这个kafka表对应的query*/, view_level, no_destination,
             thread_status_holder, running_group, elapsed_counter_ms, async_insert);
@@ -423,7 +432,6 @@ bool InterpreterInsertQuery::shouldAddSquashingForStorage(const StoragePtr & tab
 {
     auto context_ptr = getContext();
     const Settings & settings = context_ptr->getSettingsRef();
-
     /// Do not squash blocks if it is a sync INSERT into Distributed, since it lead to double bufferization on client and server side.
     /// Client-side bufferization might cause excessive timeouts (especially in case of big blocks).
     return !(settings[Setting::distributed_foreground_insert] && table->isRemote()) && !async_insert && !no_squash;
@@ -548,7 +556,13 @@ std::pair<std::vector<Chain>, std::vector<Chain>> InterpreterInsertQuery::buildP
         running_group = current_thread->getThreadGroup();
     if (!running_group)
         running_group = std::make_shared<ThreadGroup>(getContext());
-
+    LOG_DEBUG(getLogger("InterpreterInsertQuery"), "Running InterpreterInsertQuery::buildPreAndSinkChains, "
+                                                   "with presink_streams {}, "
+                                                   "sink_streams {}, "
+                                                   "table {},"
+                                                   "view_level {},"
+                                                   "noPushingToView {}",
+              presink_streams, sink_streams, table->getName(), view_level, table->noPushingToViews());
     std::vector<Chain> sink_chains;
     std::vector<Chain> presink_chains;
     // 构建Sink Chain。这个sink_streams可能多于一个，那么就构造多个相同的但是独立的chain，每个stream一个独立的chain
@@ -832,7 +846,14 @@ QueryPipeline InterpreterInsertQuery::buildInsertPipeline(ASTInsertQuery & query
     }
 
     chain.addSource(std::make_shared<DeduplicationToken::AddTokenInfoTransform>(chain.getInputHeader()));
-
+    LOG_DEBUG(getLogger("InterpreterInsertQuery"), "shouldAddSquashingForStorage return {}, "
+                                                   "async_insert {}, allow_materialized {}, no_squash {}, no_destination {}, "
+                                                   "table name {}, "
+                                                   "storage full table name {}",
+              shouldAddSquashingForStorage(table),
+              async_insert, allow_materialized, no_squash, no_destination,
+              table->getName(),
+              table->getStorageID().getFullTableName());
     if (shouldAddSquashingForStorage(table))
     {
         bool table_prefers_large_blocks = table->prefersLargeBlocks();
@@ -863,6 +884,12 @@ QueryPipeline InterpreterInsertQuery::buildInsertPipeline(ASTInsertQuery & query
     pipeline.setNumThreads(std::min<size_t>(pipeline.getNumThreads(), settings[Setting::max_threads]));
     pipeline.setConcurrencyControl(settings[Setting::use_concurrency_control]);
 
+    LOG_DEBUG(getLogger("InterpreterInsertQuery"), "query.hasInlinedData() ? {}, "
+                                                   "async_insert {}, allow_materialized {}, no_squash {}, no_destination {}, ,  table name {}, "
+                                                   "storage full table name {}, ay",
+              query.hasInlinedData(), async_insert, allow_materialized,
+              no_squash, no_destination, table->getName(),
+              table->getStorageID().getFullTableName(), );
     if (query.hasInlinedData() && !async_insert)
     {
         auto format = getInputFormatFromASTInsertQuery(query_ptr, true, query_sample_block, getContext(), nullptr);
@@ -916,9 +943,30 @@ BlockIO InterpreterInsertQuery::execute()
             if (column.default_desc.kind == ColumnDefaultKind::Materialized && query_sample_block.has(column.name))
                 throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Cannot insert column {}, because it is MATERIALIZED column.", column.name);
     }
-
+    !(settings[Setting::distributed_foreground_insert] && table->isRemote()) && !async_insert && !no_squash;
     BlockIO res;
-
+    LOG_DEBUG(
+        getLogger("InterpreterInsertQuery"),
+        "Running InterpreterInsertQuery::execute() with table {}, "
+        "no_destination: {},"
+        "async_insert: {}, "
+        "allow_materialized: {},"
+        "no_squash: {}, "
+        "settings: {},"
+        "table is remote: {},"
+        "query.select : {}, "
+        "parallel_distributed_insert_select {} "
+        "stack {}, ",
+        table->getName(),
+        this->no_destination,
+        this->async_insert,
+        this->allow_materialized,
+        this->no_squash,
+        settings[Setting::distributed_foreground_insert],
+        table->isRemote(),
+        query.select,
+        settings[Setting::parallel_distributed_insert_select],
+        StackTrace().toString());
     if (query.select)
     {
         if (settings[Setting::parallel_distributed_insert_select])

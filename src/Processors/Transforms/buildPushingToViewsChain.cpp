@@ -321,6 +321,9 @@ std::optional<Chain> generateViewChain(
     // 如果是Kafka -> mv -> MergeTree的这种 StorageMaterializedView
     if (auto * materialized_view = dynamic_cast<StorageMaterializedView *>(view.get()))
     {
+        LOG_DEBUG(getLogger("PushingToViews"), "Running generateViewChain. "
+                                               "Current type is StorageMaterializedView. View Name {}, target Table {}",
+                  materialized_view->getName(), materialized_view->getTargetTable());
         // 对物化视图本身加读锁
         auto lock = materialized_view->tryLockForShare(context->getInitialQueryId(), context->getSettingsRef()[Setting::lock_acquire_timeout]);
 
@@ -355,6 +358,12 @@ std::optional<Chain> generateViewChain(
         auto inner_metadata_snapshot = inner_table->getInMemoryMetadataPtr();
         // 从DatabaseCatalog::instance()中获取到的View信息保存在select_query中
         const auto & select_query = view_metadata_snapshot->getSelectQuery();
+        LOG_DEBUG(getLogger("PushingToViews"), "inner_table_id = {}, inner table name {} "
+                                               "select_query.select_table_id {}, "
+                                               "source storage name {}, source storage id {}",
+                  inner_table_id, inner_table_id.getFullTableName(),
+                  select_query.select_table_id, views_data->source_storage->getName(),
+                  views_data->source_storage->getStorageID());
         // 防止视图逻辑已经被改写，不再以当前表为来源。例如用户 ALTER 了视图。
         if (select_query.select_table_id != views_data->source_storage_id)
         {
@@ -402,7 +411,8 @@ std::optional<Chain> generateViewChain(
         // 查看方法 InterpreterInsertQuery::buildChain，返回一个chain
         // 这里的inner_table是当前的mv表的目标表，它可能是一个local表，也可能还是一个mv表，如果是一个mv表，那么显然会继续递归调用
         out = interpreter.buildChain(inner_table, view_level + 1, inner_metadata_snapshot, insert_columns, thread_status_holder, view_counter_ms, check_access);
-
+        LOG_DEBUG(getLogger("PushingToViews"), "Already built chain. PushingToViews, interpreter.shouldAddSquashingForStorage(inner_table) : {}",
+                  interpreter.shouldAddSquashingForStorage(inner_table));
         if (interpreter.shouldAddSquashingForStorage(inner_table))
         {
             bool table_prefers_large_blocks = inner_table->prefersLargeBlocks();
@@ -547,13 +557,14 @@ Chain buildPushingToViewsChain(
 
     if (no_destination && views.empty())
         LOG_WARNING(log, "No views attached and no_destination = 1");
-
     ViewsDataPtr views_data;
     if (!views.empty())
     {
         auto process_context = Context::createCopy(context);  /// This context will be used in `process` function
         views_data = std::make_shared<ViewsData>(thread_status_holder, process_context, table_id, metadata_snapshot, storage);
     }
+    LOG_DEBUG(log, "Chain buildPushingToViewsChain, table_id {}, views size {}, no_destination {}, async_insert {}",
+              storage->getStorageID(), views.size(), no_destination, async_insert);
     // 为每一个View构造一个独立的Chain，形成一个vector<Chain> chains
     std::vector<Chain> chains;
     for (const auto & view_id : views)
@@ -569,6 +580,13 @@ Chain buildPushingToViewsChain(
                 context, view_level, view_id, running_group, result_chain,
                 views_data, thread_status_holder, async_insert, storage_header, disable_deduplication_for_children);
 
+            LOG_DEBUG(log, "Generated chain with view_level {}, view_id {}, "
+                           "source_storage name is {}, source-storage full name {}, "
+                           "storage id {}, "
+                           "storage full table name {}, no_destination {}, async_insert {}",
+                      view_level, view_id, views_data->source_storage->getName(),
+                      views_data->source_storage->getStorageID().getFullTableName(),
+                      storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
             if (!out.has_value())
                 continue;
 
@@ -662,6 +680,14 @@ Chain buildPushingToViewsChain(
 
     if (auto * live_view = dynamic_cast<StorageLiveView *>(storage.get()))
     {
+        LOG_DEBUG(log, "Generated StorageLiveView chain with view_level {}, "
+                       "source_storage name is {}, source-storage full name {}, "
+                       "storage id {}, "
+                       "storage full table name {}, no_destination {}, async_insert {}",
+                  view_level, views_data->source_storage->getName(),
+                  views_data->source_storage->getStorageID().getFullTableName(),
+                  storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
+
         auto sink = std::make_shared<PushingToLiveViewSink>(live_view_header, *live_view, storage, context);
         sink->setRuntimeData(thread_status, elapsed_counter_ms);
         result_chain.addSource(std::move(sink));
@@ -670,6 +696,13 @@ Chain buildPushingToViewsChain(
     }
     else if (auto * window_view = dynamic_cast<StorageWindowView *>(storage.get()))
     {
+        LOG_DEBUG(log, "Generated StorageWindowView chain with view_level {}, "
+                       "source_storage name is {}, source-storage full name {}, "
+                       "storage id {}, "
+                       "storage full table name {},  no_destination {}, async_insert {}",
+                  view_level, views_data->source_storage->getName(),
+                  views_data->source_storage->getStorageID().getFullTableName(),
+                  storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
         auto sink = std::make_shared<PushingToWindowViewSink>(window_view->getInputHeader(), *window_view, storage, context);
         sink->setRuntimeData(thread_status, elapsed_counter_ms);
         result_chain.addSource(std::move(sink));
@@ -678,6 +711,13 @@ Chain buildPushingToViewsChain(
     }
     else if (dynamic_cast<StorageMaterializedView *>(storage.get()))
     {
+        LOG_DEBUG(log, "Generated StorageMaterializedView chain with view_level {}, "
+                       "source_storage name is {}, source-storage full name {}, "
+                       "storage id {}, "
+                       "storage full table name {}, no_destination {}, async_insert {}",
+                  view_level, views_data->source_storage->getName(),
+                  views_data->source_storage->getStorageID().getFullTableName(),
+                  storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
         // 只有当这个 storage 真正指向的是一个 StorageMaterializedView 实例时，转换才会成功。
         auto sink = storage->write(query_ptr, metadata_snapshot, context, async_insert);
         metadata_snapshot->check(sink->getHeader().getColumnsWithTypeAndName());
@@ -689,6 +729,15 @@ Chain buildPushingToViewsChain(
     /// Do not push to destination table if the flag is set
     else if (!no_destination) // 如果  no_destination = false
     {
+        LOG_DEBUG(log, "Not StorageMaterializedView and StorageWindowView and StorageLiveView. "
+                       "no_destination {} chain with view_level {}, "
+                       "source_storage name is {}, source-storage full name {}, "
+                       "storage id {}, "
+                       "storage full table name {}, no_destination {}, async_insert {}",
+                  no_destination,
+                  view_level, views_data->source_storage->getName(),
+                  views_data->source_storage->getStorageID().getFullTableName(),
+                  storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
         auto sink = storage->write(query_ptr, metadata_snapshot, context, async_insert);
         metadata_snapshot->check(sink->getHeader().getColumnsWithTypeAndName());
         sink->setRuntimeData(thread_status, elapsed_counter_ms);

@@ -35,6 +35,7 @@
 #include <Common/formatReadable.h>
 #include <Common/logger_useful.h>
 #include <Common/setThreadName.h>
+#include <Common/StackTrace.h>
 
 #include <Core/BackgroundSchedulePool.h>
 #include <Core/Settings.h>
@@ -221,6 +222,7 @@ StorageKafka::StorageKafka(
         setThreadName(thread_name.c_str(), /*truncate=*/ true);
         cleanConsumers();
     });
+
 }
 
 StorageKafka::~StorageKafka() = default;
@@ -599,6 +601,7 @@ void StorageKafka::threadFunc(size_t idx)
  */
 bool StorageKafka::streamToViews()
 {
+
     Stopwatch watch;
 
     auto table_id = getStorageID();
@@ -639,7 +642,7 @@ bool StorageKafka::streamToViews()
     // 注意这里的 execute() 实际上内部会走到 buildInsertPipeline()，这个函数本身会根据 no_destination = true 走不同逻辑，
     // 它不会往主表写数据，只是拿到 数据应该写成什么格式的 header。
     auto block_io = interpreter.execute(); // InterpreterInsertQuery::execute
-
+    LOG_INFO(log, "Called StorageKafka::streamToViews() with stack trace {}", StackTrace().toString());
     // Create a stream for each consumer and join them in a union stream
     std::vector<std::shared_ptr<KafkaSource>> sources;
     Pipes pipes; // 构造一个Pipes对象
