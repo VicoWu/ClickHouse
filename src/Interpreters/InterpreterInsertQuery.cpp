@@ -954,7 +954,7 @@ BlockIO InterpreterInsertQuery::execute()
     BlockIO res;
     LOG_DEBUG(
         getLogger("InterpreterInsertQuery"),
-        "Running InterpreterInsertQuery::execute() with table {}, "
+        "Running InterpreterInsertQuery::execute with table {}, "
         "no_destination: {},"
         "async_insert: {}, "
         "allow_materialized: {},"
