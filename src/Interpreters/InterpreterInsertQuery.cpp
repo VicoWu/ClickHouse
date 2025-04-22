@@ -885,11 +885,19 @@ QueryPipeline InterpreterInsertQuery::buildInsertPipeline(ASTInsertQuery & query
     pipeline.setConcurrencyControl(settings[Setting::use_concurrency_control]);
 
     LOG_DEBUG(getLogger("InterpreterInsertQuery"), "query.hasInlinedData() ? {}, "
-                                                   "async_insert {}, allow_materialized {}, no_squash {}, no_destination {}, ,  table name {}, "
-                                                   "storage full table name {}, ay",
-              query.hasInlinedData(), async_insert, allow_materialized,
-              no_squash, no_destination, table->getName(),
-              table->getStorageID().getFullTableName(), );
+                                                   "async_insert {},"
+                                                   "allow_materialized {}, "
+                                                   "no_squash {}, "
+                                                   "no_destination {}, "
+                                                   "table name {}, "
+                                                   "storage full table name {}",
+              query.hasInlinedData(),
+              async_insert,
+              allow_materialized,
+              no_squash,
+              no_destination,
+              table->getName(),
+              table->getStorageID().getFullTableName());
     if (query.hasInlinedData() && !async_insert)
     {
         auto format = getInputFormatFromASTInsertQuery(query_ptr, true, query_sample_block, getContext(), nullptr);
@@ -956,7 +964,7 @@ BlockIO InterpreterInsertQuery::execute()
         "table is remote: {},"
         "query.select : {}, "
         "parallel_distributed_insert_select {} "
-        "stack {}, ",
+        "stack {} ",
         table->getName(),
         this->no_destination,
         this->async_insert,
