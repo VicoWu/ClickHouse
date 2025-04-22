@@ -951,7 +951,6 @@ BlockIO InterpreterInsertQuery::execute()
             if (column.default_desc.kind == ColumnDefaultKind::Materialized && query_sample_block.has(column.name))
                 throw Exception(ErrorCodes::ILLEGAL_COLUMN, "Cannot insert column {}, because it is MATERIALIZED column.", column.name);
     }
-    !(settings[Setting::distributed_foreground_insert] && table->isRemote()) && !async_insert && !no_squash;
     BlockIO res;
     LOG_DEBUG(
         getLogger("InterpreterInsertQuery"),
