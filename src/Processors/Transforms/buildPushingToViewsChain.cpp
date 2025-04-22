@@ -360,10 +360,13 @@ std::optional<Chain> generateViewChain(
         const auto & select_query = view_metadata_snapshot->getSelectQuery();
         LOG_DEBUG(getLogger("PushingToViews"), "inner_table_id = {}, inner table name {} "
                                                "select_query.select_table_id {}, "
-                                               "source storage name {}, source storage id {}",
+                                               "source storage name {}, source storage id {},"
+                                               " view_data select query is {}, "
+                                               "view_data inner query is {},",
                   inner_table_id, inner_table_id.getFullTableName(),
                   select_query.select_table_id, views_data->source_storage->getName(),
-                  views_data->source_storage->getStorageID());
+                  views_data->source_storage->getStorageID(), select_query.select_query->dumpTree(),
+                  select_query.inner_query->dumpTree());
         // 防止视图逻辑已经被改写，不再以当前表为来源。例如用户 ALTER 了视图。
         if (select_query.select_table_id != views_data->source_storage_id)
         {
