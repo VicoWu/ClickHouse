@@ -7,7 +7,7 @@
 #include <Common/MultiVersion.h>
 #include <Disks/FakeDiskTransaction.h>
 #include <Disks/DiskEncryptedTransaction.h>
-
+#include <Common/logger_useful.h>
 
 namespace DB
 {
@@ -202,6 +202,7 @@ public:
 
     std::unique_ptr<ReadBufferFromFileBase> readEncryptedFile(const String & path, const ReadSettings & settings) const override
     {
+        LOG_INFO(&Poco::Logger::get("DiskEncrypted") , "my_debug read encrypted file for path {}", path);
         auto wrapped_path = wrappedPath(path);
         return delegate->readFile(wrapped_path, settings);
     }

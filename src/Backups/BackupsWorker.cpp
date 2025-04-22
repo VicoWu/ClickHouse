@@ -252,6 +252,7 @@ OperationID BackupsWorker::startMakingBackup(const ASTPtr & query, const Context
             backups_thread_pool->scheduleOrThrowOnError(
                 [this, backup_query, backup_id, backup_name_for_logging, backup_info, backup_settings, backup_coordination, context_in_use, mutable_context]
                 {
+                // BackupsWorker::doBackup
                     doBackup(
                         backup_query,
                         backup_id,
@@ -266,6 +267,7 @@ OperationID BackupsWorker::startMakingBackup(const ASTPtr & query, const Context
         }
         else
         {
+        // BackupsWorker::doBackup
             doBackup(
                 backup_query,
                 backup_id,
@@ -290,7 +292,9 @@ OperationID BackupsWorker::startMakingBackup(const ASTPtr & query, const Context
     }
 }
 
-
+/**
+* 调用者是 BackupsWorker::startMakingBackup
+*/
 void BackupsWorker::doBackup(
     const std::shared_ptr<ASTBackupQuery> & backup_query,
     const OperationID & backup_id,
@@ -328,9 +332,10 @@ void BackupsWorker::doBackup(
             cluster = context->getCluster(backup_query->cluster);
             backup_settings.cluster_host_ids = cluster->getHostIDs();
         }
-
+        LOG_INFO(log, "mydebug This is {} on_cluster backup.", on_cluster);
         /// Make a backup coordination.
         if (!backup_coordination)
+
             backup_coordination = makeBackupCoordination(context, backup_settings, /* remote= */ on_cluster);
 
         if (!allow_concurrent_backups && backup_coordination->hasConcurrentBackups(std::ref(num_active_backups)))
@@ -350,7 +355,6 @@ void BackupsWorker::doBackup(
         backup_create_params.backup_uuid = backup_settings.backup_uuid;
         backup_create_params.deduplicate_files = backup_settings.deduplicate_files;
         BackupMutablePtr backup = BackupFactory::instance().createBackup(backup_create_params);
-
         /// Write the backup.
         if (on_cluster)
         {
@@ -440,7 +444,9 @@ void BackupsWorker::buildFileInfosForBackupEntries(const BackupPtr & backup, con
     backup_coordination->addFileInfos(::DB::buildFileInfosForBackupEntries(backup_entries, backup->getBaseBackup(), *backups_thread_pool));
 }
 
-
+/**
+* 调用者是 BackupsWorker::doBackup
+*/
 void BackupsWorker::writeBackupEntries(BackupMutablePtr backup, BackupEntries && backup_entries, const OperationID & backup_id, std::shared_ptr<IBackupCoordination> backup_coordination, bool internal)
 {
     LOG_TRACE(log, "{}, num backup entries={}", Stage::WRITING_BACKUP, backup_entries.size());

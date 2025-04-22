@@ -76,6 +76,10 @@ UInt64 BackupWriterDisk::getFileSize(const String & file_name)
     return disk->getFileSize(root_path / file_name);
 }
 
+/**
+* 调用者是 BackupWriterDefault::copyDataToFile(path_in_backup, create_read_buffer, start_pos, length);
+  对比 BackupWriterS3::readFile
+*/
 std::unique_ptr<ReadBuffer> BackupWriterDisk::readFile(const String & file_name, size_t expected_file_size)
 {
     return disk->readFile(root_path / file_name, read_settings.adjustBufferSize(expected_file_size));
@@ -103,19 +107,25 @@ void BackupWriterDisk::removeFiles(const Strings & file_names)
         disk->removeDirectory(root_path);
 }
 
+/**
+* 比如将文件备份到本地磁盘
+* 调用者是 BackupImpl::writeFile
+*/
 void BackupWriterDisk::copyFileFromDisk(const String & path_in_backup, DiskPtr src_disk, const String & src_path,
                                         bool copy_encrypted, UInt64 start_pos, UInt64 length)
 {
     /// Use IDisk::copyFile() as a more optimal way to copy a file if it's possible.
     /// However IDisk::copyFile() can't use throttling for reading, and can't copy an encrypted file or copy a part of the file.
     bool has_throttling = src_disk->isRemote() ? static_cast<bool>(read_settings.remote_throttler) : static_cast<bool>(read_settings.local_throttler);
+    LOG_INFO(log, "BackupWriterDisk::copyFileFromDisk, copy_encrypted {}", copy_encrypted);
+
     if (!has_throttling && !start_pos && !copy_encrypted)
     {
         auto source_data_source_description = src_disk->getDataSourceDescription();
         if (source_data_source_description.sameKind(data_source_description) && !source_data_source_description.is_encrypted
             && (length == src_disk->getFileSize(src_path)))
         {
-            /// Use more optimal way.
+            /// Use more optimal way. 这行日志没有打印
             LOG_TRACE(log, "Copying file {} from disk {} to disk {}", src_path, src_disk->getName(), disk->getName());
             auto dest_file_path = root_path / path_in_backup;
             disk->createDirectories(dest_file_path.parent_path());

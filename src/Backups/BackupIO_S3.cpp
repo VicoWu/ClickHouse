@@ -141,11 +141,11 @@ void BackupReaderS3::copyFileToDisk(const String & path_in_backup, size_t file_s
     if (destination_data_source_description.sameKind(data_source_description)
         && (destination_data_source_description.is_encrypted == encrypted_in_backup))
     {
-        /// Use native copy, the more optimal way.
+        /// Use native copy,
         LOG_TRACE(log, "Copying {} from S3 to disk {} using native copy", path_in_backup, destination_disk->getName());
         auto write_blob_function = [&](const Strings & blob_path, WriteMode mode, const std::optional<ObjectAttributes> & object_attributes) -> size_t
         {
-            /// Object storage always uses mode `Rewrite` because it simulates append using metadata and different files.
+            /// Object storagthe more optimal way.e always uses mode `Rewrite` because it simulates append using metadata and different files.
             if (blob_path.size() != 2 || mode != WriteMode::Rewrite)
                 throw Exception(ErrorCodes::LOGICAL_ERROR,
                                 "Blob writing function called with unexpected blob_path.size={} or mode={}",
@@ -218,11 +218,14 @@ void BackupWriterS3::copyFileFromDisk(const String & path_in_backup, DiskPtr src
     }
 
     /// Fallback to copy through buffers.
+    // BackupWriterDefault::copyFileFromDisk
     BackupWriterDefault::copyFileFromDisk(path_in_backup, src_disk, src_path, copy_encrypted, start_pos, length);
 }
 
+// 调用者是 BackupWriterDefault::copyFileFromDisk
 void BackupWriterS3::copyDataToFile(const String & path_in_backup, const CreateReadBufferFunction & create_read_buffer, UInt64 start_pos, UInt64 length)
 {
+    // void copyDataToS3File(
     copyDataToS3File(create_read_buffer, start_pos, length, client, s3_uri.bucket, fs::path(s3_uri.key) / path_in_backup, request_settings, {},
                      threadPoolCallbackRunner<void>(getBackupsIOThreadPool().get(), "BackupWriterS3"));
 }
@@ -242,6 +245,10 @@ UInt64 BackupWriterS3::getFileSize(const String & file_name)
     return objects[0].GetSize();
 }
 
+/**
+* 调用者是 BackupWriterDefault::copyDataToFile(path_in_backup, create_read_buffer, start_pos, length);
+ 对比 BackupWriterDisk::readFile
+*/
 std::unique_ptr<ReadBuffer> BackupWriterS3::readFile(const String & file_name, size_t expected_file_size)
 {
     return std::make_unique<ReadBufferFromS3>(

@@ -112,7 +112,8 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
 {
     const auto data_settings = data.getSettings();
     size_t occupied = CurrentMetrics::values[CurrentMetrics::BackgroundMergesAndMutationsPoolTask].load(std::memory_order_relaxed);
-
+    LOG_INFO(log, "max_number_of_mutations_for_replica {} , occupied {}, ",
+             data_settings->max_number_of_mutations_for_replica, occupied);
     if (data_settings->max_number_of_mutations_for_replica > 0 &&
         occupied >= data_settings->max_number_of_mutations_for_replica)
         return 0;
@@ -120,12 +121,24 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
     /// DataPart can be store only at one disk. Get maximum reservable free space at all disks.
     UInt64 disk_space = data.getStoragePolicy()->getMaxUnreservedFreeSpace();
     auto max_tasks_count = data.getContext()->getMergeMutateExecutor()->getMaxTasksCount();
-
+    LOG_INFO(
+        log,
+        "max_tasks_count {} , occupied {}, "
+        "number_of_free_entries_in_pool_to_execute_mutation {}",
+        max_tasks_count,
+        occupied,
+        data_settings->number_of_free_entries_in_pool_to_execute_mutation);
     /// Allow mutations only if there are enough threads, leave free threads for merges else
     if (occupied <= 1
         || max_tasks_count - occupied >= data_settings->number_of_free_entries_in_pool_to_execute_mutation)
         return static_cast<UInt64>(disk_space / DISK_USAGE_COEFFICIENT_TO_RESERVE);
-
+    LOG_INFO(
+        log,
+        "max_tasks_count {} , occupied {}, "
+        "number_of_free_entries_in_pool_to_execute_mutation {}, max source parts is zero.",
+        max_tasks_count,
+        occupied,
+        data_settings->number_of_free_entries_in_pool_to_execute_mutation);
     return 0;
 }
 

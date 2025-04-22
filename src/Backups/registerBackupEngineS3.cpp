@@ -117,7 +117,7 @@ void registerBackupEngineS3(BackupFactory & factory)
                 backup_name_for_logging,
                 archive_params,
                 params.base_backup_info,
-                writer,
+                writer, // BackupImpl封装了具体的writer的实现
                 params.context,
                 params.is_internal_backup,
                 params.backup_coordination,

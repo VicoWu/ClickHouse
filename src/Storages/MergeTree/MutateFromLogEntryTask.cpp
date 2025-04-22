@@ -17,7 +17,7 @@ ReplicatedMergeMutateTaskBase::PrepareResult MutateFromLogEntryTask::prepare()
 {
     const String & source_part_name = entry.source_parts.at(0);
     const auto storage_settings_ptr = storage.getSettings();
-    LOG_TRACE(log, "Executing log entry to mutate part {} to {}", source_part_name, entry.new_part_name);
+    LOG_TRACE(log, "MY_DEBUG Preparing Executing log entry to mutate part {} to {}", source_part_name, entry.new_part_name);
 
     MergeTreeData::DataPartPtr source_part = storage.getActiveContainingPart(source_part_name);
     if (!source_part)

@@ -216,7 +216,7 @@ namespace
             S3::checkObjectExists(*client_ptr, dest_bucket, dest_key, {}, request_settings, {}, "Immediately after upload");
             LOG_TRACE(log, "Object {} exists after upload", dest_key);
         }
-
+        // UploadHelper::performMultipartUpload
         void performMultipartUpload(size_t start_offset, size_t size)
         {
             calculatePartSize(size);
@@ -236,6 +236,7 @@ namespace
                     size_t part_size = next_position - position; /// `part_size` is either `normal_part_size` or smaller if it's the final part.
 
                     Stopwatch watch;
+                    // UploadHelper::uploadPart
                     uploadPart(part_number, position, part_size);
                     watch.stop();
 
@@ -312,11 +313,10 @@ namespace
             /// We've calculated the size of a normal part (the final part can be smaller).
             normal_part_size = part_size;
         }
-
+        // UploadHelper::uploadPart
         void uploadPart(size_t part_number, size_t part_offset, size_t part_size)
         {
             LOG_TRACE(log, "Writing part. Bucket: {}, Key: {}, Upload_id: {}, Size: {}", dest_bucket, dest_key, multipart_upload_id, part_size);
-
             if (!part_size)
             {
                 LOG_TRACE(log, "Skipping writing an empty part.");
@@ -325,6 +325,8 @@ namespace
 
             if (schedule)
             {
+                LOG_INFO(log, "mydebug is scheduled TRUE");
+
                 UploadPartTask * task = nullptr;
 
                 {
@@ -348,13 +350,14 @@ namespace
 
                 try
                 {
+                    // CopyDataToFileHelper::fillUploadPartRequest
                     task->req = fillUploadPartRequest(part_number, part_offset, part_size);
 
                     schedule([this, task, task_finish_notify]()
                     {
                         try
                         {
-                            processUploadTask(*task);
+                            processUploadTask(*task); // CopyHelper::processUploadTask
                         }
                         catch (...)
                         {
@@ -371,18 +374,22 @@ namespace
             }
             else
             {
+                LOG_INFO(log, "mydebug is scheduled FALSE");
                 UploadPartTask task;
+                // CopyDataToFileHelper::fillUploadPartRequest
                 task.req = fillUploadPartRequest(part_number, part_offset, part_size);
                 processUploadTask(task);
                 part_tags.push_back(task.tag);
             }
         }
 
+        // CopyHelper::processUploadTask
         void processUploadTask(UploadPartTask & task)
         {
             if (multipart_upload_aborted)
                 return; /// Already aborted.
 
+            // CopyDataToFileHelper::processUploadPartRequest
             auto tag = processUploadPartRequest(*task.req);
 
             std::lock_guard lock(bg_tasks_mutex); /// Protect bg_tasks from race
@@ -391,7 +398,7 @@ namespace
         }
 
         virtual std::unique_ptr<Aws::AmazonWebServiceRequest> fillUploadPartRequest(size_t part_number, size_t part_offset, size_t part_size) = 0;
-        virtual String processUploadPartRequest(Aws::AmazonWebServiceRequest & request) = 0;
+        virtual String processUploadPartRequest(Aws::AmazonWebServiceRequest & request) = 0; // CopyDataToFileHelper::processUploadPartRequest
 
         void waitForAllBackgroundTasks()
         {
@@ -442,13 +449,14 @@ namespace
             , size(size_)
         {
         }
-
+        // CopyDataToFileHelper::performCopy()
+        // 调用者是 void copyDataToS3File
         void performCopy()
         {
-            if (size <= upload_settings.max_single_part_upload_size)
-                performSinglepartUpload();
+            if (size <= upload_settings.max_single_part_upload_size) // 这个值是32MB
+                performSinglepartUpload(); //  小于32mb, 单part上传
             else
-                performMultipartUpload();
+                performMultipartUpload(); // 搜索 void performMultipartUpload()
 
             if (request_settings.check_objects_after_upload)
                 checkObjectAfterUpload();
@@ -468,6 +476,7 @@ namespace
 
         void fillPutRequest(S3::PutObjectRequest & request)
         {
+            // create_read_buffer的创建在方法BackupWriterDefault::copyFileFromDisk 中
             auto read_buffer = std::make_unique<LimitSeekableReadBuffer>(create_read_buffer(), offset, size);
 
             request.SetBucket(dest_bucket);
@@ -553,6 +562,7 @@ namespace
 
         void performMultipartUpload() { UploadHelper::performMultipartUpload(offset, size); }
 
+        // CopyDataToFileHelper::fillUploadPartRequest
         std::unique_ptr<Aws::AmazonWebServiceRequest> fillUploadPartRequest(size_t part_number, size_t part_offset, size_t part_size) override
         {
             auto read_buffer = std::make_unique<LimitSeekableReadBuffer>(create_read_buffer(), part_offset, part_size);
@@ -572,10 +582,11 @@ namespace
             return request;
         }
 
+        // CopyDataToFileHelper::processUploadPartRequest
         String processUploadPartRequest(Aws::AmazonWebServiceRequest & request) override
         {
             auto & req = typeid_cast<S3::UploadPartRequest &>(request);
-
+            // 每个part大小大概为16m, 从metrics上看，每次上传大概2753个part，因此总上传大小为45g，与结果吻合
             ProfileEvents::increment(ProfileEvents::S3UploadPart);
             if (for_disk_s3)
                 ProfileEvents::increment(ProfileEvents::DiskS3UploadPart);
@@ -791,9 +802,11 @@ namespace
     };
 }
 
-
+/**
+* 调用者是 BackupWriterS3::copyDataToFile
+*/
 void copyDataToS3File(
-    const std::function<std::unique_ptr<SeekableReadBuffer>()> & create_read_buffer,
+    const std::function<std::unique_ptr<SeekableReadBuffer>()> & create_read_buffer, // 返回一个 AsynchronousReadBufferFromFileWithDescriptorsCache
     size_t offset,
     size_t size,
     const std::shared_ptr<const S3::Client> & dest_s3_client,
@@ -805,7 +818,7 @@ void copyDataToS3File(
     bool for_disk_s3)
 {
     CopyDataToFileHelper helper{create_read_buffer, offset, size, dest_s3_client, dest_bucket, dest_key, settings, object_metadata, schedule, for_disk_s3};
-    helper.performCopy();
+    helper.performCopy(); // CopyDataToFileHelper::performCopy
 }
 
 
