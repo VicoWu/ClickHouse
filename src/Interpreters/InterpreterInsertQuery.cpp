@@ -961,7 +961,6 @@ BlockIO InterpreterInsertQuery::execute()
         "no_squash: {}, "
         "settings: {},"
         "table is remote: {},"
-        "query.select : {}, "
         "parallel_distributed_insert_select {} "
         "stack {} ",
         table->getName(),
@@ -971,7 +970,6 @@ BlockIO InterpreterInsertQuery::execute()
         this->no_squash,
         settings[Setting::distributed_foreground_insert],
         table->isRemote(),
-        query.dumpTree(),
         settings[Setting::parallel_distributed_insert_select],
         StackTrace().toString());
     if (query.select)
