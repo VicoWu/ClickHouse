@@ -323,7 +323,7 @@ std::optional<Chain> generateViewChain(
     {
         LOG_DEBUG(getLogger("PushingToViews"), "Running generateViewChain. "
                                                "Current type is StorageMaterializedView. View Name {}, target Table {}",
-                  materialized_view->getName(), materialized_view->getTargetTable());
+                  materialized_view->getName(), materialized_view->getTargetTable()->getName());
         // 对物化视图本身加读锁
         auto lock = materialized_view->tryLockForShare(context->getInitialQueryId(), context->getSettingsRef()[Setting::lock_acquire_timeout]);
 
