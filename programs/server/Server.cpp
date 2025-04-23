@@ -1082,7 +1082,7 @@ try
 
         /// Set up server-wide memory profiler (for total memory tracker).
         if (server_settings[ServerSetting::total_memory_profiler_step])
-            .setProfilerStep(server_settings[ServerSetting::total_memory_profiler_step]);
+            total_memory_tracker.setProfilerStep(server_settings[ServerSetting::total_memory_profiler_step]);
 
         if (server_settings[ServerSetting::total_memory_tracker_sample_probability] > 0.0)
             total_memory_tracker.setSampleProbability(server_settings[ServerSetting::total_memory_tracker_sample_probability]);
