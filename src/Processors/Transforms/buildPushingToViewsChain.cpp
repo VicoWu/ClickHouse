@@ -565,6 +565,19 @@ Chain buildPushingToViewsChain(
     {
         auto process_context = Context::createCopy(context);  /// This context will be used in `process` function
         views_data = std::make_shared<ViewsData>(thread_status_holder, process_context, table_id, metadata_snapshot, storage);
+        LOG_DEBUG(log, "Generated views data with view_level {}, "
+                       "source_storage name is {}, source-storage full name {}, "
+                       "storage id {}, "
+                       "storage full table name {}, no_destination {}, async_insert {}",
+                  view_level,  (views_data->source_storage)
+                      ? views_data->source_storage->getName()
+                      :"NULL",
+                  ((views_data->source_storage && views_data->source_storage->getStorageID() )
+                       ? views_data->source_storage->getStorageID().getFullTableName()
+                       : "NULL"),
+                  storage->getName(),
+                  table_id ? table_id.getFullTableName() : "NULL",
+                  no_destination, async_insert);
     }
     LOG_DEBUG(log, "Chain buildPushingToViewsChain, table_id {}, views size {}, no_destination {}, async_insert {}",
               storage->getStorageID(), views.size(), no_destination, async_insert);
@@ -585,11 +598,11 @@ Chain buildPushingToViewsChain(
 
             LOG_DEBUG(log, "Generated chain with view_level {}, view_id {}, "
                            "source_storage name is {}, source-storage full name {}, "
-                           "storage id {}, "
-                           "storage full table name {}, no_destination {}, async_insert {}",
-                      view_level, view_id, views_data->source_storage->getName(),
-                      views_data->source_storage->getStorageID().getFullTableName(),
-                      storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
+                           "no_destination {}, async_insert {}",
+                      view_level, view_id,
+                      storage->getName(),
+                      table_id ? table_id.getFullTableName() : "NULL",
+                      no_destination, async_insert);
             if (!out.has_value())
                 continue;
 
