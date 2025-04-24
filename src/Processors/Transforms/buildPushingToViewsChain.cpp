@@ -700,9 +700,11 @@ Chain buildPushingToViewsChain(
                        "source_storage name is {}, source-storage full name {}, "
                        "storage id {}, "
                        "storage full table name {}, no_destination {}, async_insert {}",
-                  view_level, views_data->source_storage->getName(),
-                  views_data->source_storage->getStorageID().getFullTableName(),
-                  storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
+                  view_level,
+                  ((views_data && views_data->source_storage) ? views_data->source_storage->getName() : "NULL"),
+                  ((views_data && views_data->source_storage && views_data->source_storage->getStorageID() )
+                       ? views_data->source_storage->getStorageID().getFullTableName() : "NULL"),
+                  storage->getName(), (table_id ? table_id.getFullTableName(): "NULL"), no_destination, async_insert);
 
         auto sink = std::make_shared<PushingToLiveViewSink>(live_view_header, *live_view, storage, context);
         sink->setRuntimeData(thread_status, elapsed_counter_ms);
@@ -716,9 +718,11 @@ Chain buildPushingToViewsChain(
                        "source_storage name is {}, source-storage full name {}, "
                        "storage id {}, "
                        "storage full table name {},  no_destination {}, async_insert {}",
-                  view_level, views_data->source_storage->getName(),
-                  views_data->source_storage->getStorageID().getFullTableName(),
-                  storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
+                  view_level,
+                  ((views_data && views_data->source_storage) ? views_data->source_storage->getName() : "NULL"),
+                  ((views_data && views_data->source_storage && views_data->source_storage->getStorageID() )
+                       ? views_data->source_storage->getStorageID().getFullTableName() : "NULL"),
+                  storage->getName(), (table_id ? table_id.getFullTableName(): "NULL"),  no_destination, async_insert);
         auto sink = std::make_shared<PushingToWindowViewSink>(window_view->getInputHeader(), *window_view, storage, context);
         sink->setRuntimeData(thread_status, elapsed_counter_ms);
         result_chain.addSource(std::move(sink));
@@ -731,9 +735,11 @@ Chain buildPushingToViewsChain(
                        "source_storage name is {}, source-storage full name {}, "
                        "storage id {}, "
                        "storage full table name {}, no_destination {}, async_insert {}",
-                  view_level, views_data->source_storage->getName(),
-                  views_data->source_storage->getStorageID().getFullTableName(),
-                  storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
+                  view_level,
+                  ((views_data && views_data->source_storage) ? views_data->source_storage->getName() : "NULL"),
+                  ((views_data && views_data->source_storage && views_data->source_storage->getStorageID() )
+                       ? views_data->source_storage->getStorageID().getFullTableName() : "NULL"),
+                  storage->getName(), (table_id ? table_id.getFullTableName(): "NULL"),  no_destination, async_insert);
         // 只有当这个 storage 真正指向的是一个 StorageMaterializedView 实例时，转换才会成功。
         auto sink = storage->write(query_ptr, metadata_snapshot, context, async_insert);
         metadata_snapshot->check(sink->getHeader().getColumnsWithTypeAndName());
@@ -751,9 +757,12 @@ Chain buildPushingToViewsChain(
                        "storage id {}, "
                        "storage full table name {}, no_destination {}, async_insert {}",
                   no_destination,
-                  view_level, views_data->source_storage->getName(),
-                  views_data->source_storage->getStorageID().getFullTableName(),
-                  storage->getName(), storage->getStorageID().getFullTableName(), no_destination, async_insert);
+                  view_level,
+                  ((views_data && views_data->source_storage) ? views_data->source_storage->getName() : "NULL"),
+                  ((views_data && views_data->source_storage && views_data->source_storage->getStorageID() )
+                       ? views_data->source_storage->getStorageID().getFullTableName() : "NULL"),
+                  storage->getName(),
+                  (table_id ? table_id.getFullTableName(): "NULL"), no_destination, async_insert);
         auto sink = storage->write(query_ptr, metadata_snapshot, context, async_insert);
         metadata_snapshot->check(sink->getHeader().getColumnsWithTypeAndName());
         sink->setRuntimeData(thread_status, elapsed_counter_ms);
