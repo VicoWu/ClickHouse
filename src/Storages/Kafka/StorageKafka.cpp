@@ -428,6 +428,7 @@ void StorageKafka::cleanConsumers()
 
     std::unique_lock lock(mutex);
     std::chrono::milliseconds timeout(KAFKA_RESCHEDULE_MS);
+    // 在 cleanup_cv的条件变量上，基于lock进行等待
     while (!cleanup_cv.wait_for(lock, timeout, [this]() { return shutdown_called == true; }))
     {
         /// Copy consumers for closing to a new vector to close them without a lock
@@ -450,7 +451,7 @@ void StorageKafka::cleanConsumers()
                 if (now_usec - consumer_last_used_usec > ttl_usec)
                 {
                     LOG_TRACE(log, "Closing #{} consumer (id: {})", i, consumer_ptr->getMemberId());
-                    consumers_to_close.push_back(consumer_ptr->moveConsumer());
+                    consumers_to_close.push_back(consumer_ptr->moveConsumer()); // 这里会unsubscribe并清空消息
                 }
             }
         }
@@ -461,7 +462,7 @@ void StorageKafka::cleanConsumers()
 
             Stopwatch watch;
             size_t closed = consumers_to_close.size();
-            consumers_to_close.clear();
+            consumers_to_close.clear(); // 在这里会触发Consumer::~Consumer的析构，因此，析构调用以前，已经通过调用moveConsumer 来消费完了所有的消息，并且调用了unsubscribe
             LOG_TRACE(log, "{} consumers had been closed (due to {} usec timeout). Took {} ms.",
                 closed, ttl_usec, watch.elapsedMilliseconds());
 

@@ -79,6 +79,7 @@ void KafkaConsumer::createConsumer(cppkafka::Configuration consumer_config)
     consumer->set_destroy_flags(RD_KAFKA_DESTROY_F_NO_CONSUMER_CLOSE);
 
     // called (synchronously, during poll) when we enter the consumer group
+    // 从这里可以看到，assignment_callback 的调用只是用来告诉客户端assignment已经成功，客户端也只是把assignment更新到本地
     consumer->set_assignment_callback([this](const cppkafka::TopicPartitionList & topic_partitions)
     {
         CurrentMetrics::add(CurrentMetrics::KafkaAssignedPartitions, topic_partitions.size());
@@ -151,11 +152,11 @@ void KafkaConsumer::createConsumer(cppkafka::Configuration consumer_config)
 ConsumerPtr && KafkaConsumer::moveConsumer()
 {
     cleanUnprocessed();
-    if (!consumer->get_subscription().empty())
+    if (!consumer->get_subscription().empty()) // 如果有订阅
     {
         try
         {
-            consumer->unsubscribe();
+            consumer->unsubscribe(); // 虽然能中断自己的消息消费，
         }
         catch (const cppkafka::HandleException & e)
         {
