@@ -149,7 +149,7 @@ private:
     mutable std::mutex rdkafka_stat_mutex;
     std::string rdkafka_stat;
 
-    ConsumerPtr consumer;
+    ConsumerPtr consumer; // cppkafka::Consumer
     LoggerPtr log;
     const size_t batch_size = 1;
     const size_t poll_timeout = 0;
@@ -163,8 +163,8 @@ private:
     const std::atomic<bool> & stopped;
 
     // order is important, need to be destructed *before* consumer
-    Messages messages;
-    Messages::const_iterator current;
+    Messages messages; // std::vector<cppkafka::Message>
+    Messages::const_iterator current; // current
 
     // order is important, need to be destructed *before* consumer
     std::optional<cppkafka::TopicPartitionList> assignment;

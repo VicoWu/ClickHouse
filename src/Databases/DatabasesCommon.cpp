@@ -265,18 +265,27 @@ bool DatabaseWithOwnTablesBase::empty() const
 StoragePtr DatabaseWithOwnTablesBase::detachTable(ContextPtr /* context_ */, const String & table_name)
 {
     std::lock_guard lock(mutex);
+    //  调用的是父类的 DatabaseWithOwnTablesBase::detachTableUnlocked
     return detachTableUnlocked(table_name);
 }
 
+/**
+ * @param table_name
+ * @return
+ */
 StoragePtr DatabaseWithOwnTablesBase::detachTableUnlocked(const String & table_name)
 {
+    // 获取这个Database下面所有的表
     auto it = tables.find(table_name);
     if (it == tables.end())
         throw Exception(ErrorCodes::UNKNOWN_TABLE, "Table {}.{} doesn't exist",
                         backQuote(database_name), backQuote(table_name));
 
     auto table_storage = it->second;
-
+    /**
+     * using SnapshotDetachedTables = std::map<String, SnapshotDetachedTable>;
+     * 将这个待detach的表添加到 snapshot_detached_tables 中
+     */
     snapshot_detached_tables.emplace(
         table_name,
         SnapshotDetachedTable{
@@ -284,10 +293,10 @@ StoragePtr DatabaseWithOwnTablesBase::detachTableUnlocked(const String & table_n
             .table = table_name,
             .uuid = it->second->getStorageID().uuid,
             .metadata_path = getObjectMetadataPath(table_name),
-            .is_permanently = false});
+            .is_permanently = false}); // 默认is_permanently是false，如果的确是permanently，后续会改成true
 
-    tables.erase(it);
-    table_storage->is_detached = true;
+    tables.erase(it); // 从这个DatabaseAtomic中删除
+    table_storage->is_detached = true; // 标记为已经detach
 
     if (!table_storage->isSystemStorage() && !DatabaseCatalog::isPredefinedDatabase(database_name))
     {
@@ -299,7 +308,7 @@ StoragePtr DatabaseWithOwnTablesBase::detachTableUnlocked(const String & table_n
     if (table_id.hasUUID())
     {
         assert(database_name == DatabaseCatalog::TEMPORARY_DATABASE || getUUID() != UUIDHelpers::Nil);
-        DatabaseCatalog::instance().removeUUIDMapping(table_id.uuid);
+        DatabaseCatalog::instance().removeUUIDMapping(table_id.uuid); // 脱离DatabaseCatalog的管理
     }
 
     return table_storage;

@@ -189,7 +189,7 @@ protected:
     Int64 task_max_lifetime = 7 * 24 * 60 * 60; // week (in seconds)
     /// How many tasks could be in the queue
     size_t max_tasks_in_queue = 1000;
-
+    // 在DDLWorker::updateMaxDDLEntryID中会更新max_id的值
     std::atomic<UInt32> max_id = 0;
 
     ConcurrentSet entries_to_skip;

@@ -1525,7 +1525,7 @@ bool InterpreterCreateQuery::doCreateTable(ASTCreateQuery & create,
             auto drop_ast = std::make_shared<ASTDropQuery>();
             drop_ast->setDatabase(create.getDatabase());
             drop_ast->setTable(create.getTable());
-            drop_ast->no_ddl_lock = true;
+            drop_ast->no_ddl_lock = true; // 已经获取并持有了锁
 
             auto drop_context = Context::createCopy(context);
             InterpreterDropQuery interpreter(drop_ast, drop_context);

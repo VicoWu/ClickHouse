@@ -195,16 +195,16 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
 
         auto new_query_ptr = query.clone();
         auto & query_to_send = new_query_ptr->as<ASTDropQuery &>();
-
+        // 如果这个query含有cluster信息，并且，不需要删掉对应的`ON CLUSTER 'cluster name'`信
         if (!query.cluster.empty() && !maybeRemoveOnCluster(new_query_ptr, getContext()))
         {
             query_to_send.if_empty = false;
 
             DDLQueryOnClusterParams params;
             params.access_to_check = getRequiredAccessForDDLOnCluster();
-            return executeDDLQueryOnCluster(new_query_ptr, getContext(), params);
+            return executeDDLQueryOnCluster(new_query_ptr, getContext(), params); // 在Cluster中的所有DDL中执行整个query
         }
-
+        // 如果这个IDatabase的实现在当前的上下文中应该使用ReplicateQuery，那么就使用Replicate
         if (database->shouldReplicateQuery(getContext(), current_query_ptr))
         {
             if (query.kind == ASTDropQuery::Kind::Detach)
@@ -218,9 +218,13 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
             table.reset();
 
             query_to_send.if_empty = false;
-
+            // 通过keeper来发布ReplicatedQuery的DDL
+            // 搜索方法 DatabaseReplicated::tryEnqueueReplicatedDDL
             return database->tryEnqueueReplicatedDDL(new_query_ptr, context_);
         }
+        /**
+         * 执行到这里， database->shouldReplicateQuery(getContext(), current_query_ptr)返回是false
+         */
 
         if (query.kind == ASTDropQuery::Kind::Detach)
         {
@@ -234,14 +238,15 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
             }
             else
                 table->checkTableCanBeDetached();
-
-            table->flushAndShutdown();
+            //每一个table都是一个IStorage实现，这里调用对应的virtual方法 IStorage::flushAndShutdown方法
+            table->flushAndShutdown();  // is_drop = true
             TableExclusiveLockHolder table_lock;
-
+            // 如果是 DatabaseOrdinary 下面的table，那么需要获取一个全局锁，这个锁是非常heavy的
+            // 但是如果是DatabaseAtomic 下面的table，那么统一交给DatabaseCatalog进行管理
             if (database->getUUID() == UUIDHelpers::Nil)
                 table_lock = table->lockExclusively(context_->getCurrentQueryId(), context_->getSettingsRef().lock_acquire_timeout);
 
-            if (query.permanently)
+            if (query.permanently) // 如果是永久删除，那么需要删除 Dependency， 和DROP一样
             {
                 /// Server may fail to restart of DETACH PERMANENTLY if table has dependent ones
                 bool check_ref_deps = getContext()->getSettingsRef().check_referential_table_dependencies;
@@ -253,6 +258,7 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
             else
             {
                 /// Drop table from memory, don't touch data and metadata
+                // 这里，DatabaseReplicated和DatabaseOnDisk都没有重写，都是使用的 DatabaseAtomic::detachTable
                 database->detachTable(context_, table_id.table_name);
             }
         }
@@ -295,9 +301,10 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
             bool check_loading_deps = !check_ref_deps && getContext()->getSettingsRef().check_table_dependencies;
             DatabaseCatalog::instance().checkTableCanBeRemovedOrRenamed(table_id, check_ref_deps, check_loading_deps, is_drop_or_detach_database);
 
-            table->flushAndShutdown(true);
+            table->flushAndShutdown(true); // is_drop = true
 
             TableExclusiveLockHolder table_lock;
+            // 如果是OrdinatorDatabase,那么需要添加一个全局的排他锁
             if (database->getUUID() == UUIDHelpers::Nil)
                 table_lock = table->lockExclusively(context_->getCurrentQueryId(), context_->getSettingsRef().lock_acquire_timeout);
 
@@ -562,7 +569,7 @@ void InterpreterDropQuery::executeDropQuery(ASTDropQuery::Kind kind, ContextPtr 
         if (ignore_sync_setting)
             drop_context->setSetting("database_atomic_wait_for_drop_and_detach_synchronously", false);
         drop_context->setQueryKind(ClientInfo::QueryKind::SECONDARY_QUERY);
-        if (auto txn = current_context->getZooKeeperMetadataTransaction())
+        if (auto txn = current_context->getZooKeeperMetadataTransaction()) // 当前是Replicated的DDL的一部分
         {
             /// For Replicated database
             drop_context->setQueryKindReplicatedDatabaseInternal();

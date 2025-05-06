@@ -973,6 +973,7 @@ DatabaseAndTable DatabaseCatalog::getDatabaseAndTable(const StorageID & table_id
 
 DatabaseAndTable DatabaseCatalog::tryGetDatabaseAndTable(const StorageID & table_id, ContextPtr local_context) const
 {
+    // 尝试获取database和table，exception为null，即，当获取不到database和table的时候静默处理
     return getTableImpl(table_id, local_context, nullptr);
 }
 
@@ -1848,14 +1849,16 @@ TemporaryLockForUUIDDirectory & TemporaryLockForUUIDDirectory::operator = (Tempo
 DDLGuard::DDLGuard(Map & map_, SharedMutex & db_mutex_, std::unique_lock<std::mutex> guards_lock_, const String & elem, const String & database_name)
         : map(map_), db_mutex(db_mutex_), guards_lock(std::move(guards_lock_))
 {
+    // 如果map中存在elem，则返回对应的Entry的Iterator指针，
+    // 如果map中不存在elem，则往map中插入一个代表这个table的Entry，计数器为0，获取对应的迭代器指针
     it = map.emplace(elem, Entry{std::make_unique<std::mutex>(), 0}).first;
-    ++it->second.counter;
-    guards_lock.unlock();
-    table_lock = std::unique_lock(*it->second.mutex);
-    is_database_guard = elem.empty();
+    ++it->second.counter; // 这个插入的Entry的计数器+1
+    guards_lock.unlock(); // 传入的全局DDL锁解锁
+    table_lock = std::unique_lock(*it->second.mutex); // 对表开始上锁
+    is_database_guard = elem.empty();// 如果没有传入表明，那么就是需要在database层面加guard
     if (!is_database_guard)
     {
-
+        // 如果是表级别，那么需要在数据库级别上共享锁
         bool locked_database_for_read = db_mutex.try_lock_shared();
         if (!locked_database_for_read)
         {

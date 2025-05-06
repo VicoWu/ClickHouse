@@ -548,10 +548,13 @@ bool DDLWorker::tryExecuteQuery(DDLTaskBase & task, const ZooKeeperPtr & zookeep
 
 void DDLWorker::updateMaxDDLEntryID(const String & entry_name)
 {
+    // 从 ZooKeeper 的 entry 名称中提取出数值型的 ID，例如从 "query-0000001234" 提取出 1234。
     UInt32 id = DDLTaskBase::getLogEntryNumber(entry_name);
     auto prev_id = max_id.load(std::memory_order_relaxed);
     while (prev_id < id)
     {
+        // 原子操作，只有当 prev_id == max_id 时才会成功把 max_id 改成 id；
+        // 如果有别的线程也在更新，它会失败，并自动把最新的 max_id 放到 prev_id 中，进入下一轮比较
         if (max_id.compare_exchange_weak(prev_id, id))
         {
             if (max_entry_metric)
@@ -561,6 +564,9 @@ void DDLWorker::updateMaxDDLEntryID(const String & entry_name)
     }
 }
 
+/**
+ * 在分布式环境下安全、幂等地执行一个 DDL 任务，并将其状态（active、finished、synced）记录在 ZooKeeper 中
+*/
 void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
 {
     LOG_DEBUG(log, "Processing task {} (query: {}, backup restore: {})", task.entry_name, task.query_for_logging, task.entry.is_backup_restore);
@@ -571,7 +577,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
         task.entry.tracing_context,
         this->context->getOpenTelemetrySpanLog());
     tracing_ctx_holder.root_span.kind = OpenTelemetry::SpanKind::CONSUMER;
-
+    // 获取keeper上对应的active node和finish_node
     String active_node_path = task.getActiveNodePath();
     String finished_node_path = task.getFinishedNodePath();
 
@@ -583,7 +589,14 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
     auto active_node = zkutil::EphemeralNodeHolder::existing(active_node_path, *zookeeper);
 
     /// Try fast path
+    // 获取当前ClickHouse Server的UUID
     const String canary_value = Field(ServerUUID::get()).dump();
+    // 在active目录下面为当前的host创建一个对应的临时节点
+    /**
+     * 每个任务有一个 active 节点，代表“当前有一个 ClickHouse 实例正在执行此任务”。
+     * 使用 ephemeral 节点，断线或 crash 自动消失。
+     * canary_value 是当前服务器 UUID，方便比对。
+     */
     auto create_active_res = zookeeper->tryCreate(active_node_path, canary_value, zkutil::CreateMode::Ephemeral);
     if (create_active_res != Coordination::Error::ZOK)
     {
@@ -594,7 +607,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
         }
 
         /// Status dirs were not created in enqueueQuery(...) or someone is removing entry
-        if (create_active_res == Coordination::Error::ZNONODE)
+        if (create_active_res == Coordination::Error::ZNONODE) // 说明 entry 被删了，跳过。
         {
             chassert(dynamic_cast<DatabaseReplicatedTask *>(&task) == nullptr);
             if (task.was_executed)
@@ -610,14 +623,14 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
             }
             createStatusDirs(task.entry_path, zookeeper);
         }
-
+        // 说明是重试场景，尝试删除旧的 ephemeral 节点。
         if (create_active_res == Coordination::Error::ZNODEEXISTS)
         {
             /// Connection has been lost and now we are retrying,
             /// but our previous ephemeral node still exists.
             zookeeper->deleteEphemeralNodeIfContentMatches(active_node_path, canary_value);
         }
-
+        // 创建一个代表当前任务是active状态的临时节点
         zookeeper->create(active_node_path, canary_value, zkutil::CreateMode::Ephemeral);
     }
 
@@ -632,6 +645,9 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
         /// with other zk operations (such as appending something to ReplicatedMergeTree log, or
         /// updating metadata in Replicated database), so we make create request for finished_node_path with status "0",
         /// which means that query executed successfully.
+        /**
+         * 会将任务的 ops 填充为：删除 active 节点, 创建 finished 节点，写入执行状态（成功/失败）。
+         */
         task.ops.emplace_back(zkutil::makeRemoveRequest(active_node_path, -1));
         task.ops.emplace_back(zkutil::makeCreateRequest(finished_node_path, ExecutionStatus(0).serializeText(), zkutil::CreateMode::Persistent));
 
@@ -654,10 +670,12 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
 
             if (task.execute_on_leader)
             {
+                // leader执行
                 tryExecuteQueryOnLeaderReplica(task, storage, task.entry_path, zookeeper, execute_on_leader_lock);
             }
             else
             {
+                // 普通执行
                 storage.reset();
                 tryExecuteQuery(task, zookeeper);
             }
@@ -702,26 +720,52 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
     bool status_written = task.ops.empty();
     if (!status_written)
     {
+        /**
+         * 执行剩余所有 ZooKeeper 操作（原子提交）：
+         * 删除 active 节点。
+         * 创建 finished 节点。
+         * 写入执行状态。
+         */
+
+        // 一次性执行task中的所有的ops
         zookeeper->multi(task.ops);
-        task.ops.clear();
+        task.ops.clear(); //清空所有的ops
     }
 
     /// Active node was removed in multi ops
     active_node->setAlreadyRemoved();
 
     task.createSyncedNodeIfNeed(zookeeper);
-    updateMaxDDLEntryID(task.entry_name);
+    updateMaxDDLEntryID(task.entry_name); // 更新max_id的值
     task.completely_processed = true;
     subsequent_errors_count = 0;
 }
 
-
+/**
+ * 某个 DDL 查询是否应该只在主副本（leader replica）上执行一次，
+ * 然后由 Replicated 引擎通过 ZooKeeper 同步到其他副本，而不是每个副本都单独执行一遍。
+ * ast_ddl：抽象语法树（AST），表示当前的 DDL 语句。
+ * storage：目标表的 Storage 引擎，用于判断是否支持复制。
+ * 某些类型的 DDL 查询，比如 ALTER/OPTIMIZE 等，如果每个副本都执行一遍，可能导致不一致或冲突，因此需要通过 leader 副本统一执行一次。
+ */
 bool DDLWorker::taskShouldBeExecutedOnLeader(const ASTPtr & ast_ddl, const StoragePtr storage)
 {
     /// Pure DROP queries have to be executed on each node separately
+    /**
+     * 对于普通的 DROP TABLE / DROP DATABASE：
+     * 每个副本都要单独执行，因为表/库的存在本地依赖。
+     * 例外是 TRUNCATE，因为它不删除元数据，只清空数据，可统一由 leader 执行。
+     * 从ASTDropQuery::Kind可以看到，DROP, TRUNCATE和DETACH在ClickHouse中都是一种类型的DropQuery
+     */
     if (auto * query = ast_ddl->as<ASTDropQuery>(); query && query->kind != ASTDropQuery::Kind::Truncate)
         return false;
-
+    /**
+     * 以下几种查询类型才考虑 leader 执行：
+     * ALTER TABLE
+     * OPTIMIZE TABLE
+     * DROP TABLE（Truncate）
+     * CREATE INDEX / DROP INDEX（ClickHouse 中不常见）
+     */
     if (!ast_ddl->as<ASTAlterQuery>() &&
         !ast_ddl->as<ASTOptimizeQuery>() &&
         !ast_ddl->as<ASTDropQuery>() &&
@@ -729,6 +773,13 @@ bool DDLWorker::taskShouldBeExecutedOnLeader(const ASTPtr & ast_ddl, const Stora
         !ast_ddl->as<ASTDropIndexQuery>())
         return false;
 
+    /**
+     * 对于 ALTER 操作，还要排除掉这些子类型，它们应在每个副本单独执行：
+     *  修改表设置（ALTER ... MODIFY SETTING）
+     *  冻结（ALTER ... FREEZE）
+     *  移动分区到磁盘/卷（ALTER ... MOVE PARTITION）
+     *  注释（ALTER ... COMMENT）
+     * */
     if (auto * alter = ast_ddl->as<ASTAlterQuery>())
     {
         // Setting alters should be executed on all replicas
@@ -736,9 +787,9 @@ bool DDLWorker::taskShouldBeExecutedOnLeader(const ASTPtr & ast_ddl, const Stora
             alter->isFreezeAlter() ||
             alter->isMovePartitionToDiskOrVolumeAlter() ||
             alter->isCommentAlter())
-            return false;
+            return false; // 上面的alter类型应该在所有节点上执行
     }
-
+    // 如果这个表是 ReplicatedMergeTree 或其他支持复制的引擎，才允许只在 leader 上执行。
     return storage->supportsReplication();
 }
 

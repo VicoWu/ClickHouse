@@ -31,6 +31,7 @@ using HandleExceptionInOutputFormatFunc = std::function<void(IOutputFormat & out
 
 struct QueryFlags
 {
+    // 查询标签，默认情况下，一个query不是一个内部子查询，即不是一个独立的query，因此不需要出现在process_list中
     bool internal = false; /// If true, this query is caused by another query and thus needn't be registered in the ProcessList.
     bool distributed_backup_restore = false; /// If true, this query is a part of backup restore.
 };

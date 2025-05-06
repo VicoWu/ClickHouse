@@ -187,7 +187,7 @@ StorageKafka::StorageKafka(
 
     consumers.resize(num_consumers);
     for (size_t i = 0; i < num_consumers; ++i)
-        consumers[i] = createKafkaConsumer(i);
+        consumers[i] = createKafkaConsumer(i); // 创建 KafkaConsumer，一个KafkaConsumer封装了一个cpp::Consumer，一个cpp::Consumer封装了rddkafka对象
 
     cleanup_thread = std::make_unique<ThreadFromGlobalPool>([this]()
     {
@@ -255,18 +255,22 @@ void StorageKafka::startup()
     }
 }
 
-
+/**
+ * 在InterpreterDropQuery.executeToTableImpl()中调用
+ * 参数存在是为了匹配某个接口，但实现中不使用它, 避免编译器警告未使用变量， 接口兼容性，如实现某个虚函数：
+ */
 void StorageKafka::shutdown(bool)
 {
     shutdown_called = true;
-    cleanup_cv.notify_one();
+    cleanup_cv.notify_one(); // 在这里通知cleanup_thread的执行
 
     {
         LOG_TRACE(log, "Waiting for consumers cleanup thread");
         Stopwatch watch;
         if (cleanup_thread)
         {
-            cleanup_thread->join();
+
+            cleanup_thread->join(); // 在这里会造成 moveConsumer 的调用和 Consumer 的析构已经被调用
             cleanup_thread.reset();
         }
         LOG_TRACE(log, "Consumers cleanup thread finished in {} ms.", watch.elapsedMilliseconds());
@@ -275,10 +279,10 @@ void StorageKafka::shutdown(bool)
     {
         LOG_TRACE(log, "Waiting for streaming jobs");
         Stopwatch watch;
-        for (auto & task : tasks)
+        for (auto & task : tasks) // 每一个task执行的是 void StorageKafka::threadFunc(size_t idx)
         {
             // Interrupt streaming thread
-            task->stream_cancelled = true;
+            task->stream_cancelled = true;  // 在这里才会阻止CPPKafka进行消息的消费和commit
 
             LOG_TEST(log, "Waiting for cleanup of a task");
             task->holder->deactivate();
@@ -428,9 +432,10 @@ void StorageKafka::cleanConsumers()
 
     std::unique_lock lock(mutex);
     std::chrono::milliseconds timeout(KAFKA_RESCHEDULE_MS);
-    // 在 cleanup_cv的条件变量上，基于lock进行等待
+    // 在 cleanup_cv的条件变量上，基于lock进行等待. 在StorageKafka.shutdown()中会对这个cv置位，从而收到通知
     while (!cleanup_cv.wait_for(lock, timeout, [this]() { return shutdown_called == true; }))
     {
+        //收到cleanup通知，开始执行cleanup
         /// Copy consumers for closing to a new vector to close them without a lock
         std::vector<ConsumerPtr> consumers_to_close;
 
@@ -498,6 +503,10 @@ size_t StorageKafka::getPollTimeoutMillisecond() const
         : getContext()->getSettingsRef().stream_poll_timeout_ms.totalMilliseconds();
 }
 
+/**
+ * 每一个task都会执行threadFunc
+ * @param idx
+ */
 void StorageKafka::threadFunc(size_t idx)
 {
     assert(idx < tasks.size());
@@ -516,7 +525,7 @@ void StorageKafka::threadFunc(size_t idx)
             mv_attached.store(true);
 
             // Keep streaming as long as there are attached views and streaming is not cancelled
-            while (!task->stream_cancelled)
+            while (!task->stream_cancelled) // 只要还没有stream_cancelled
             {
                 if (!StorageKafkaUtils::checkDependencies(table_id, getContext()))
                     break;
@@ -524,7 +533,7 @@ void StorageKafka::threadFunc(size_t idx)
                 LOG_DEBUG(log, "Started streaming to {} attached views", num_views);
 
                 // Exit the loop & reschedule if some stream stalled
-                auto some_stream_is_stalled = streamToViews();
+                auto some_stream_is_stalled = streamToViews(); //  继续消费消息
                 if (some_stream_is_stalled)
                 {
                     LOG_TRACE(log, "Stream(s) stalled. Reschedule.");
@@ -649,7 +658,7 @@ bool StorageKafka::streamToViews()
     for (auto & source : sources)
     {
         some_stream_is_stalled = some_stream_is_stalled || source->isStalled();
-        source->commit();
+        source->commit(); // 客户端主动进行Kafka消息的Commit，offset存储在Kafka这一端
     }
 
     UInt64 milliseconds = watch.elapsedMilliseconds();

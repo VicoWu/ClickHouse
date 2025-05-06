@@ -222,7 +222,16 @@ bool DatabaseReplicatedDDLWorker::waitForReplicaToProcessAllEntries(UInt64 timeo
     return event_ptr->tryWait(timeout_ms);
 }
 
-
+/**
+ * 调用者是 DatabaseReplicatedDDLWorker::enqueueQuery
+ * 它的作用是将一个 DDL 查询写入 ZooKeeper 中的 DDL 日志队列，
+ * 并为它分配一个唯一递增的编号，以确保所有副本都按相同的顺序执行 DDL。
+ * @param zookeeper
+ * @param entry
+ * @param database
+ * @param committed
+ * @return
+ */
 String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookeeper, DDLLogEntry & entry,
                                DatabaseReplicated * const database, bool committed)
 {
@@ -230,32 +239,36 @@ String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookee
 
     /// We cannot create sequential node and it's ephemeral child in a single transaction, so allocate sequential number another way
     String counter_prefix = database->zookeeper_path + "/counter/cnt-";
+    // 用于防止多个副本并发创建 cnt- 节点时竞争冲突
     String counter_lock_path = database->zookeeper_path + "/counter_lock";
 
     String counter_path;
     size_t iters = 1000;
-    while (--iters)
+    while (--iters) // 反复重试，直到成功创建一个sequential节点
     {
         Coordination::Requests ops;
         ops.emplace_back(zkutil::makeCreateRequest(counter_lock_path, database->getFullReplicaName(), zkutil::CreateMode::Ephemeral));
+        // 创建一个 /counter/cnt为前缀的ephemeral的sequential节点，比如， /counter/cnt-00000123 节点
         ops.emplace_back(zkutil::makeCreateRequest(counter_prefix, "", zkutil::CreateMode::EphemeralSequential));
         Coordination::Responses res;
-
+        // 创建对应的counter节点
         Coordination::Error code = zookeeper->tryMulti(ops, res);
         if (code == Coordination::Error::ZOK)
-        {
+        {   // 成功创建了对应的sequential节点，这时候counter_path就含有了对应的序号
             counter_path = dynamic_cast<const Coordination::CreateResponse &>(*res.back()).path_created;
             break;
         }
         else if (code != Coordination::Error::ZNODEEXISTS)
             zkutil::KeeperMultiException::check(code, ops, res);
     }
-
+    // 没有创建成功
     if (counter_path.empty())
         throw Exception(ErrorCodes::UNFINISHED,
                         "Cannot enqueue query, because some replica are trying to enqueue another query. "
                         "It may happen on high queries rate or, in rare cases, after connection loss. Client should retry.");
 
+    // 根据前面创建的 sequential 节点路径 counter_path，生成最终的 DDL 日志节点路径 node_path
+    // /clickhouse/databases/db1/log/query-00000123
     String node_path = query_path_prefix + counter_path.substr(counter_prefix.size());
 
     /// Now create task in queue
@@ -272,10 +285,11 @@ String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookee
     /// Unlock counters
     ops.emplace_back(zkutil::makeRemoveRequest(counter_lock_path, -1));
     /// Create status dirs
+    // 状态目录，用于各副本跟踪执行进度
     ops.emplace_back(zkutil::makeCreateRequest(node_path + "/active", "", zkutil::CreateMode::Persistent));
     ops.emplace_back(zkutil::makeCreateRequest(node_path + "/finished", "", zkutil::CreateMode::Persistent));
     ops.emplace_back(zkutil::makeCreateRequest(node_path + "/synced", "", zkutil::CreateMode::Persistent));
-    zookeeper->multi(ops);
+    zookeeper->multi(ops); // 一次性执行多个命令
 
 
     return node_path;
@@ -291,13 +305,15 @@ String DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry(DDLLogEntry & entr
     entry.tracing_context = OpenTelemetry::CurrentContext();
 
     auto zookeeper = getAndSetZooKeeper();
+    // 获取当前的max_id值
     UInt32 our_log_ptr = getLogPointer();
+    // 当前keeper上记录的max_log_ptr的值
     UInt32 max_log_ptr = parse<UInt32>(zookeeper->get(database->zookeeper_path + "/max_log_ptr"));
-
+    // 如果当前在zookeepeer上，这个数据库允许的最大的lag的数量已经超出限制，则拒绝执行
     if (our_log_ptr + database->db_settings.max_replication_lag_to_enqueue < max_log_ptr)
         throw Exception(ErrorCodes::NOT_A_LEADER, "Cannot enqueue query on this replica, "
                         "because it has replication lag of {} queries. Try other replica.", max_log_ptr - our_log_ptr);
-
+    // 放入到zookeeper队列中，返回对应的query节点  /log/query-00123
     String entry_path = enqueueQuery(entry);
     auto try_node = zkutil::EphemeralNodeHolder::existing(entry_path + "/try", *zookeeper);
     String entry_name = entry_path.substr(entry_path.rfind('/') + 1);
@@ -306,7 +322,7 @@ String DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry(DDLLogEntry & entr
     task->parseQueryFromEntry(context);
     chassert(!task->entry.query.empty());
     assert(!zookeeper->exists(task->getFinishedNodePath()));
-    task->is_initial_query = true;
+    task->is_initial_query = true; // 这是初始的query对应的task
 
     LOG_DEBUG(log, "Waiting for worker thread to process all entries before {}", entry_name);
     UInt64 timeout = query_context->getSettingsRef().database_replicated_initial_query_timeout_sec;
@@ -325,9 +341,9 @@ String DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry(DDLLogEntry & entr
 
     if (zookeeper->expired() || stop_flag)
         throw Exception(ErrorCodes::DATABASE_REPLICATION_FAILED, "ZooKeeper session expired or replication stopped, try again");
-
+    // 调用 DDLWorker::processTask
     processTask(*task, zookeeper);
-
+    // 任务没有执行成功，抛出异常
     if (!task->was_executed)
     {
         throw Exception(
@@ -468,6 +484,7 @@ void DatabaseReplicatedDDLWorker::initializeLogPointer(const String & processed_
 
 UInt32 DatabaseReplicatedDDLWorker::getLogPointer() const
 {
+    // 在 DDLWorker::updateMaxDDLEntryID 方法中会更新max_id的值
     /// NOTE it may not be equal to the log_ptr in zk:
     ///  - max_id can be equal to log_ptr - 1 due to race condition (when it's updated in zk, but not updated in memory yet)
     ///  - max_id can be greater than log_ptr, because log_ptr is not updated for failed and dummy entries

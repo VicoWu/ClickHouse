@@ -45,8 +45,8 @@ class DDLGuard
 public:
     struct Entry
     {
-        std::unique_ptr<std::mutex> mutex;
-        UInt32 counter;
+        std::unique_ptr<std::mutex> mutex; // 对应的表的mutex，对表进行DDL操作的时候需要对这个mutex上锁
+        UInt32 counter; // 这个表上的DDL的计数器锁
     };
 
     /// Element name -> (mutex, counter).

@@ -585,8 +585,8 @@ public:
       */
     void flushAndShutdown(bool is_drop = false)
     {
-        flushAndPrepareForShutdown();
-        shutdown(is_drop);
+        flushAndPrepareForShutdown(); // 对于Kafka表，没有重写这个方法
+        shutdown(is_drop); // 对于Kafka表，则是调用 StorageKafka::shutdown
     }
 
     /** If the table have to do some complicated work when destroying an object - do it in advance.

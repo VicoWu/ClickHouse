@@ -475,7 +475,7 @@ DatabaseReplicatedTask::DatabaseReplicatedTask(const String & name, const String
     : DDLTaskBase(name, path)
     , database(database_)
 {
-    host_id_str = database->getFullReplicaName();
+    host_id_str = database->getFullReplicaName(); // 执行当前task的host名称
 }
 
 String DatabaseReplicatedTask::getShardID() const
@@ -499,6 +499,8 @@ ContextMutablePtr DatabaseReplicatedTask::makeQueryContext(ContextPtr from_conte
 {
     auto query_context = DDLTaskBase::makeQueryContext(from_context, zookeeper);
     query_context->setQueryKind(ClientInfo::QueryKind::SECONDARY_QUERY);
+    // 这里的含义是，这里的数据库虽然是DatabaseReplicated，但是当前执行的正是这个分布式task的一个子task，因此不需要再进行分布式执行了
+    // 设置 is_replicated_database_internal
     query_context->setQueryKindReplicatedDatabaseInternal();
     query_context->setCurrentDatabase(database->getDatabaseName());
 

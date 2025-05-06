@@ -116,8 +116,10 @@ StoragePtr DatabaseAtomic::detachTable(ContextPtr /* context */, const String & 
     StoragePtr detached_table;
     {
         std::lock_guard lock(mutex);
+        // 调用父类的方法 DatabaseWithOwnTablesBase::detachTableUnlocked
         detached_table = DatabaseOrdinary::detachTableUnlocked(name);
         table_name_to_path.erase(name);
+        // 添加到 detached_tables中
         detached_tables.emplace(detached_table->getStorageID().uuid, detached_table);
         not_in_use = cleanupDetachedTables();
     }

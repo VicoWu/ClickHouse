@@ -302,22 +302,25 @@ void DatabaseOnDisk::commitCreateTable(const ASTCreateQuery & query, const Stora
 void DatabaseOnDisk::detachTablePermanently(ContextPtr query_context, const String & table_name)
 {
     waitDatabaseStarted();
-
+    // 这里会将table_name添加到 snapshot_detached_tables 中
+    // 这里调用的是父类的 DatabaseWithOwnTablesBase::detachTable
     auto table = detachTable(query_context, table_name);
-
+    // 创建一个永久detach的标记文件，这样，即使ClickHouse发生重启，只要没有手动重新attach，这张表始终处于detach状态
     fs::path detached_permanently_flag(getObjectMetadataPath(table_name) + detached_suffix);
     try
     {
+        // 给这张表的元数据sql文件后面添加一个.detached后缀
         FS::createFile(detached_permanently_flag);
 
         std::lock_guard lock(mutex);
+        // 维护 snapshot_detached_tables， 管理runtime的detached 表的信息，比如给用户查询system.detached_table表
         if (const auto it = snapshot_detached_tables.find(table_name); it == snapshot_detached_tables.end())
         {
             throw Exception(ErrorCodes::LOGICAL_ERROR, "Snapshot doesn't contain info about detached table `{}`", table_name);
         }
         else
         {
-            it->second.is_permanently = true;
+            it->second.is_permanently = true; // 将对应的永久标志符设置为true
         }
     }
     catch (Exception & e)

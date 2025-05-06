@@ -42,7 +42,9 @@ const auto MAX_TIME_TO_WAIT_FOR_ASSIGNMENT_MS = 15000;
 const std::size_t POLL_TIMEOUT_WO_ASSIGNMENT_MS = 50;
 const auto DRAIN_TIMEOUT_MS = 5000ms;
 
-
+/**
+ * 调用者是 StorageKafka::createKafkaConsumer
+ */
 KafkaConsumer::KafkaConsumer(
     LoggerPtr log_,
     size_t max_batch_size,
@@ -61,6 +63,10 @@ KafkaConsumer::KafkaConsumer(
 {
 }
 
+/**
+ * 调用者是 StorageKafka::popConsumer
+ * @param consumer_config
+ */
 void KafkaConsumer::createConsumer(cppkafka::Configuration consumer_config)
 {
     chassert(!consumer.get());
@@ -156,7 +162,9 @@ ConsumerPtr && KafkaConsumer::moveConsumer()
     {
         try
         {
-            consumer->unsubscribe(); // 虽然能中断自己的消息消费，
+            // ubsubscribe只能在消费者级别进行， 这是 Kafka 消费者（rd_kafka_t）提供的方法，它用于取消对已订阅主题的订阅。
+            // 当调用 unsubscribe() 时，消费者将不再从当前订阅的主题中拉取消息，但并不会改变消费者的分区分配策略，只是停止从所有订阅的主题中拉取消息。
+            consumer->unsubscribe();
         }
         catch (const cppkafka::HandleException & e)
         {
@@ -300,6 +308,9 @@ void KafkaConsumer::commit()
     offsets_stored = 0;
 }
 
+/**
+ * 在KafkaSource::generateImpl() 中被调用，即真正开始消费的时候调用
+ */
 void KafkaConsumer::subscribe()
 {
     LOG_TRACE(log, "Already subscribed to topics: [{}]", boost::algorithm::join(consumer->get_subscription(), ", "));
@@ -343,7 +354,7 @@ void KafkaConsumer::subscribe()
 void KafkaConsumer::cleanUnprocessed()
 {
     messages.clear();
-    current = messages.begin();
+    current = messages.begin();  // 没有处理的消息，完全可以设置成messages.end()，因为反正也没有提交
     offsets_stored = 0;
 }
 
@@ -394,7 +405,7 @@ ReadBufferPtr KafkaConsumer::consume()
     if (hasMorePolledMessages())
         return getNextMessage();
 
-    if (intermediate_commit)
+    if (intermediate_commit) // 如果设定了每次提交，则每次都进行提交
         commit();
 
     while (true)
@@ -483,21 +494,21 @@ ReadBufferPtr KafkaConsumer::consume()
     ProfileEvents::increment(ProfileEvents::KafkaMessagesPolled, messages.size());
 
     stalled_status = NOT_STALLED;
-    return getNextMessage();
+    return getNextMessage(); // 调用getNextMessage()，返回单条消息
 }
 
 ReadBufferPtr KafkaConsumer::getNextMessage()
 {
-    if (current == messages.end())
+    if (current == messages.end()) // 没有消息
         return nullptr;
 
     const auto * data = current->get_payload().get_data();
     size_t size = current->get_payload().get_size();
     ++current;
-
+    // 封装了消息的buf和大小，返回单条消息
     if (data)
         return std::make_shared<ReadBufferFromMemory>(data, size);
-
+    // 如果有消息，但是data是空的， 则继续调用
     return getNextMessage();
 }
 

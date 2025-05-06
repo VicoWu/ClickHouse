@@ -991,7 +991,7 @@ BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, Contex
 
     if (is_readonly)
         throw Exception(ErrorCodes::NO_ZOOKEEPER, "Database is in readonly mode, because it cannot connect to ZooKeeper");
-
+    // 如果这是一个独立的、由用户发起的query，并且是一个INITIAL_QUERY()
     if (!flags.internal && (query_context->getClientInfo().query_kind != ClientInfo::QueryKind::INITIAL_QUERY))
         throw Exception(ErrorCodes::INCORRECT_QUERY, "It's not initial query. ON CLUSTER is not allowed for Replicated database.");
 
@@ -1000,10 +1000,11 @@ BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, Contex
 
     DDLLogEntry entry;
     entry.query = queryToString(query);
-    entry.initiator = ddl_worker->getCommonHostID();
+    entry.initiator = ddl_worker->getCommonHostID(); // 设置这个分布式任务的发起者的信息
     entry.setSettingsIfRequired(query_context);
     entry.tracing_context = OpenTelemetry::CurrentContext();
     entry.is_backup_restore = flags.distributed_backup_restore;
+    // 调用 DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry
     String node_path = ddl_worker->tryEnqueueAndExecuteEntry(entry, query_context);
 
     Strings hosts_to_wait;
@@ -1739,7 +1740,7 @@ void DatabaseReplicated::detachTablePermanently(ContextPtr local_context, const 
     new_digest -= getMetadataHash(table_name);
     if (txn && !is_recovering)
         txn->addOp(zkutil::makeSetRequest(replica_path + "/digest", toString(new_digest), -1));
-
+    // 这里实际上调用的是父类的方法，DatabaseOnDisk::detachTablePermanently，执行真正的detach
     DatabaseAtomic::detachTablePermanently(local_context, table_name);
     tables_metadata_digest = new_digest;
     assert(checkDigestValid(local_context));
@@ -1892,12 +1893,14 @@ bool DatabaseReplicated::shouldReplicateQuery(const ContextPtr & query_context, 
     /// Some ALTERs are not replicated on database level
     if (const auto * alter = query_ptr->as<const ASTAlterQuery>())
     {
+        // 如果是数据本身的操作，那么需要依赖表本身的Replication能力，不应该让Database层面的Replication来执行，否则会造成多次的数据拷贝
         if (alter->isAttachAlter() || alter->isFetchAlter() || alter->isDropPartitionAlter() || is_keeper_map_table(query_ptr) || alter->isFreezeAlter())
             return false;
-
+        // 如果是元数据的操作，只要是多shard，那么就需要依赖Database层面的同步，完成多个shard的DDL操作。
+        // 如果只有一个shard，表不是replicat表，那么可以依赖Database层面的同步
         if (has_many_shards() || !is_replicated_table(query_ptr))
             return true;
-
+        // 如果只有一个shard并且是复制表的情况
         try
         {
             /// Metadata alter should go through database
@@ -1942,7 +1945,7 @@ void registerDatabaseReplicated(DatabaseFactory & factory)
     {
         auto * engine_define = args.create_query.storage;
         const ASTFunction * engine = engine_define->engine;
-
+        // 创建DatabaseReplicated的时候必须是3个参数
         if (!engine->arguments || engine->arguments->children.size() != 3)
             throw Exception(ErrorCodes::BAD_ARGUMENTS, "Replicated database requires 3 arguments: zookeeper path, shard name and replica name");
 
