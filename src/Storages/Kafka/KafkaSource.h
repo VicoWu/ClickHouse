@@ -45,6 +45,10 @@ private:
     UInt64 max_block_size;
 
     KafkaConsumerPtr consumer;
+    /**
+     * broken = true 表示当前 KafkaSource 破坏了 consumer pool 的平衡（因为借了东西）；
+     * 一旦 commit() 成功，代表这个 consumer 的 offset 已确认，可以安全归还，所以 broken = false。
+     */
     bool broken = true;
     bool is_finished = false;
     bool commit_in_suffix;

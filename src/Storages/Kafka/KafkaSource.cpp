@@ -50,14 +50,20 @@ KafkaSource::KafkaSource(
 {
 }
 
+/**
+ * streamToViews方法每次调用的时候会创建KafkaSource，但是结束的时候会销毁 KafkaSource
+ */
 KafkaSource::~KafkaSource()
 {
     if (!consumer)
         return;
-
+    /**
+     * broken = true 表示当前 KafkaSource 破坏了 consumer pool 的平衡（因为借了东西）；
+     * 一旦 commit() 成功，代表这个 consumer 的 offset 已确认，可以安全归还，所以 broken = false。
+     */
     if (broken)
         consumer->unsubscribe();
-
+    // 将这个consumer重新归还到consumer的池子中
     storage.pushConsumer(consumer);
 }
 
@@ -76,13 +82,13 @@ bool KafkaSource::checkTimeLimit() const
 
 Chunk KafkaSource::generateImpl()
 {
-    if (!consumer)
+    if (!consumer) // 第一次调用的时候，没有consumer，以后，如果正常情况下，consumer都不再为空
     {
         auto timeout = std::chrono::milliseconds(context->getSettingsRef().kafka_max_wait_ms.totalMilliseconds());
         consumer = storage.popConsumer(timeout);
 
         if (!consumer)
-            return {};
+            return {}; // 没有拿到Consumer
 
         consumer->subscribe();
 
@@ -297,7 +303,10 @@ void KafkaSource::commit()
         return;
 
     consumer->commit();
-
+    /**
+     * broken = true 表示当前 KafkaSource 破坏了 consumer pool 的平衡（因为借了东西）；
+     * 一旦 commit() 成功，代表这个 consumer 的 offset 已确认，可以安全归还，所以 broken = false。
+     */
     broken = false;
 }
 

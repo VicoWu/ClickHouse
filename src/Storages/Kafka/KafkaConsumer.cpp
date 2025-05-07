@@ -309,7 +309,8 @@ void KafkaConsumer::commit()
 }
 
 /**
- * 在KafkaSource::generateImpl() 中被调用，即真正开始消费的时候调用
+ * 在KafkaSource::generateImpl() 中被调用，即真正开始消费的时候调用。
+ * 一个正常已经开始消费以后，这个方法不会调用
  */
 void KafkaConsumer::subscribe()
 {
@@ -327,7 +328,7 @@ void KafkaConsumer::subscribe()
 
     size_t max_retries = 5;
 
-    while (consumer->get_subscription().empty())
+    while (consumer->get_subscription().empty()) // 反复订阅，直到subscription不为空
     {
         --max_retries;
         try
@@ -358,6 +359,9 @@ void KafkaConsumer::cleanUnprocessed()
     offsets_stored = 0;
 }
 
+/**
+ * 在KafkaSource::~KafkaSource()中被调用，当 broken = true的时候
+ */
 void KafkaConsumer::unsubscribe()
 {
     LOG_TRACE(log, "Re-joining claimed consumer after failure");
