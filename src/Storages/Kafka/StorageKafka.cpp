@@ -321,7 +321,7 @@ void StorageKafka::shutdown(bool)
         std::lock_guard lock(mutex);
         LOG_TRACE(log, "Closing {} consumers", consumers.size());
         Stopwatch watch;
-        consumers.clear();
+        consumers.clear(); // 在这里进行consumers 的析构，而那些不活跃的consumer，也是持续被CleanupThread进行析构的
         LOG_TRACE(log, "Consumers closed. Took {} ms.", watch.elapsedMilliseconds());
     }
 
@@ -457,7 +457,7 @@ cppkafka::Configuration StorageKafka::getProducerConfiguration()
     return KafkaConfigLoader::getProducerConfiguration(*this, params);
 }
 
-void StorageKafka::cleanConsumers()
+void StorageKafka::cleanConsumers()gi
 {
     UInt64 ttl_usec = (*kafka_settings)[KafkaSetting::kafka_consumers_pool_ttl_ms] * 1'000;
 
