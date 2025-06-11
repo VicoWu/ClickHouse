@@ -162,15 +162,16 @@ ConsumerPtr && KafkaConsumer::moveConsumer()
     {
         try
         {
-            // ubsubscribe只能在消费者级别进行， 这是 Kafka 消费者（rd_kafka_t）提供的方法，它用于取消对已订阅主题的订阅。
+            // unsubscribe只能在消Consumer级别进行， 这是 Kafka 消费者（rd_kafka_t）提供的方法，它用于取消对已订阅主题的订阅。
             // 当调用 unsubscribe() 时，消费者将不再从当前订阅的主题中拉取消息，但并不会改变消费者的分区分配策略，只是停止从所有订阅的主题中拉取消息。
+            // 当unsubscribe方法返回，说明已经unsubscribe成功了
             consumer->unsubscribe();
         }
         catch (const cppkafka::HandleException & e)
         {
             LOG_ERROR(log, "Error during unsubscribe: {}", e.what());
         }
-        drain();
+        drain(); // 等待，一直到Kafka收不到消息了
     }
     return std::move(consumer);
 }

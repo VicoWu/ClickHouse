@@ -315,7 +315,7 @@ void drainConsumer(
     while (true)
     {
         auto msg = consumer.poll(100ms);
-        if (!msg)
+        if (!msg) //  没有消息了，退出，说明kafka已经清空了
             break;
 
         auto error = msg.get_error();

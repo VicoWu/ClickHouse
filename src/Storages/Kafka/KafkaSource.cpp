@@ -51,14 +51,16 @@ KafkaSource::KafkaSource(
 }
 
 /**
- * streamToViews方法每次调用的时候会创建KafkaSource，但是结束的时候会销毁 KafkaSource
+ * streamToViews 法每次调用的时候会创建KafkaSource，但是结束的时候会销毁 KafkaSource
+ * KafkaSource对应一张表的KafkaConsumer
+ * 注意，KafkaSource是不断创建和销毁的，但是底层的Consumer确是在一个pool中维护的。
  */
 KafkaSource::~KafkaSource()
 {
     if (!consumer)
         return;
     /**
-     * broken = true 表示当前 KafkaSource 破坏了 consumer pool 的平衡（因为借了东西）；
+     * broken = true 表示当前 KafkaSource 还没有commit
      * 一旦 commit() 成功，代表这个 consumer 的 offset 已确认，可以安全归还，所以 broken = false。
      */
     if (broken)

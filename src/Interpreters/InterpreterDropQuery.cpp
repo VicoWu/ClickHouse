@@ -239,6 +239,7 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
             else
                 table->checkTableCanBeDetached();
             //每一个table都是一个IStorage实现，这里调用对应的virtual方法 IStorage::flushAndShutdown方法
+            // 对于kafka表，在detach以前，需要flush数据并且停止消费
             table->flushAndShutdown();  // is_drop = true
             TableExclusiveLockHolder table_lock;
             // 如果是 DatabaseOrdinary 下面的table，那么需要获取一个全局锁，这个锁是非常heavy的
@@ -258,6 +259,7 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
             else
             {
                 /// Drop table from memory, don't touch data and metadata
+                // 真正进行detach操
                 // 这里，DatabaseReplicated和DatabaseOnDisk都没有重写，都是使用的 DatabaseAtomic::detachTable
                 database->detachTable(context_, table_id.table_name);
             }
@@ -300,7 +302,11 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
             bool check_ref_deps = getContext()->getSettingsRef().check_referential_table_dependencies;
             bool check_loading_deps = !check_ref_deps && getContext()->getSettingsRef().check_table_dependencies;
             DatabaseCatalog::instance().checkTableCanBeRemovedOrRenamed(table_id, check_ref_deps, check_loading_deps, is_drop_or_detach_database);
-
+            //用户的DROP TABLE ON CLUSTER请求在这里卡住了。
+            //#3  0x0000000015d536e2 in Poco::EventImpl::waitImpl() ()
+            //#4  0x00000000108ab386 in DB::StorageKafka::shutdown(bool) ()
+            //#5  0x00000000119fd3a7 in DB::InterpreterDropQuery::executeToTableImpl(std::__1::shared_ptr<DB::Context const> const&, DB::ASTDropQuery&, std::__1::shared_ptr<DB::IDatabase>&, StrongTypedef<wide::integer<128ul, unsigned int>, DB::UUIDTag>&) ()
+            //#6  0x00000000119f7a83 in DB::InterpreterDropQuery::execute() ()
             table->flushAndShutdown(true); // is_drop = true
 
             TableExclusiveLockHolder table_lock;

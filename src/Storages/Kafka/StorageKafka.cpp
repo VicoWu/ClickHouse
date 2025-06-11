@@ -310,7 +310,7 @@ void StorageKafka::shutdown(bool)
 void StorageKafka::pushConsumer(KafkaConsumerPtr consumer)
 {
     std::lock_guard lock(mutex);
-    consumer->notInUse();
+    consumer->notInUse(); // 设置这个Consumer 的 in_use = false，并且记录最后的时间
     cv.notify_one();
     CurrentMetrics::sub(CurrentMetrics::KafkaConsumersInUse, 1);
 }
@@ -426,6 +426,12 @@ cppkafka::Configuration StorageKafka::getProducerConfiguration()
     return KafkaConfigLoader::getProducerConfiguration(*this, params);
 }
 
+/**
+ * 这里主要是将长期idle的consumer执行析构。
+ * KafkaConsumer的析构其实是非常重的操作，必须将 KafkaSource 和KafkaConsumer的析构区分开，
+ * KafkaSource的析构是非常频繁的，每一次streamToViews的调用，都会造成KafkaSource的构造和析构，
+ * 每一个KafkaSource都封装了对应的一个KafkaConsumer
+ */
 void StorageKafka::cleanConsumers()
 {
     UInt64 ttl_usec = kafka_settings->kafka_consumers_pool_ttl_ms * 1'000;
@@ -447,10 +453,11 @@ void StorageKafka::cleanConsumers()
 
                 UInt64 consumer_last_used_usec = consumer_ptr->getLastUsedUsec();
                 chassert(consumer_last_used_usec <= now_usec);
-
+                // 当前的KafkaConsumer是否有封装的 cppkafka::Consumer
                 if (!consumer_ptr->hasConsumer())
                     continue;
-                if (consumer_ptr->isInUse())
+                // 搜索 void notInUse()
+                if (consumer_ptr->isInUse()) // 如果当前kafka正在消费，不应该close
                     continue;
 
                 if (now_usec - consumer_last_used_usec > ttl_usec)
@@ -621,6 +628,7 @@ bool StorageKafka::streamToViews()
     pipes.reserve(stream_count);
     for (size_t i = 0; i < stream_count; ++i)
     {
+        // 从这里来看，当方法streamToViews结束的时候，对象KafkaSource就会被析构
         auto source = std::make_shared<KafkaSource>(*this, storage_snapshot, kafka_context, block_io.pipeline.getHeader().getNames(), log, block_size, false);
         sources.emplace_back(source);
         pipes.emplace_back(source);
