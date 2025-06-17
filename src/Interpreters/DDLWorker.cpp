@@ -664,13 +664,15 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
                     auto table_id = context->tryResolveStorageID(*query_with_table, Context::ResolveOrdinary);
                     storage = DatabaseCatalog::instance().tryGetTable(table_id, context);
                 }
-
+                // 判断这个task是否只需要在shard的某一个replica上执行，而不是所有的replica上执行
                 task.execute_on_leader = storage && taskShouldBeExecutedOnLeader(task.query, storage) && !task.is_circular_replicated;
             }
 
+            // 如果这是一个只能在leader上执行的task，那么，就需要通过tryExecuteQueryOnLeaderReplica方法，保证
             if (task.execute_on_leader)
             {
-                // leader执行
+                // leader执行，其实对于ReplicatedMergeTree，所有replica都是leader，所有，tryExecuteQueryOnLeaderReplica()
+                // 方法并不是让这个task只在leader上执行，而是只在shard上的一个replica上执行
                 tryExecuteQueryOnLeaderReplica(task, storage, task.entry_path, zookeeper, execute_on_leader_lock);
             }
             else
@@ -760,7 +762,7 @@ bool DDLWorker::taskShouldBeExecutedOnLeader(const ASTPtr & ast_ddl, const Stora
     if (auto * query = ast_ddl->as<ASTDropQuery>(); query && query->kind != ASTDropQuery::Kind::Truncate)
         return false;
     /**
-     * 以下几种查询类型才考虑 leader 执行：
+     * 以下几种查询类型才考虑只在 leader 执行：
      * ALTER TABLE
      * OPTIMIZE TABLE
      * DROP TABLE（Truncate）
@@ -771,7 +773,7 @@ bool DDLWorker::taskShouldBeExecutedOnLeader(const ASTPtr & ast_ddl, const Stora
         !ast_ddl->as<ASTDropQuery>() &&
         !ast_ddl->as<ASTCreateIndexQuery>() &&
         !ast_ddl->as<ASTDropIndexQuery>())
-        return false;
+        return false; // 在所有replica上执行
 
     /**
      * 对于 ALTER 操作，还要排除掉这些子类型，它们应在每个副本单独执行：
@@ -789,10 +791,16 @@ bool DDLWorker::taskShouldBeExecutedOnLeader(const ASTPtr & ast_ddl, const Stora
             alter->isCommentAlter())
             return false; // 上面的alter类型应该在所有节点上执行
     }
+    // 其他ALTER（如增加列，修改列类型，增加索引等结构变更），返回true，表示只在Leader上执行
     // 如果这个表是 ReplicatedMergeTree 或其他支持复制的引擎，才允许只在 leader 上执行。
     return storage->supportsReplication();
 }
 
+/**
+ * 版设计中，所有副本都可以被认为是“leader”——这是为了避免因为 leader 选举导致单点瓶颈，提升可用性和并行度。
+ * 但是为了分布式 DDL 操作时防止冲突，ClickHouse 又引入了基于 ZooKeeper 的分布式锁机制来“虚拟”选出唯一的执行者。
+ * 所以，这个方法的命名似乎是legacy的，准确的理解是：只在Shard的某一个Replica上执行，而不是在Shard的所有replica上执行
+ */
 bool DDLWorker::tryExecuteQueryOnLeaderReplica(
     DDLTaskBase & task,
     StoragePtr storage,
@@ -807,7 +815,9 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
         throw Exception(ErrorCodes::LOGICAL_ERROR, "Storage type '{}' is not supported by distributed DDL", storage->getName());
 
     String shard_path = task.getShardNodePath();
+    // 这个task是否已经被执行，如果存在这个节点，节点中存放了执行者replica
     String is_executed_path = fs::path(shard_path) / "executed";
+    // 开始尝试执行，创建这个节点的时候，其中存放了执行的attempt次数
     String tries_to_execute_path = fs::path(shard_path) / "tries_to_execute";
     assert(shard_path.starts_with(String(fs::path(task.entry_path) / "shards" / "")));
     zookeeper->createIfNotExists(fs::path(task.entry_path) / "shards", "");
@@ -818,6 +828,7 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
     auto create_shard_flag = zkutil::makeCreateRequest(is_executed_path, task.host_id_str, zkutil::CreateMode::Persistent);
 
     /// Node exists, or we will create or we will get an exception
+    // 这个节点或者存在，如果不存在，则初始化为0，后续执行者每次尝试执行的时候都不断递增
     zookeeper->tryCreate(tries_to_execute_path, "0", zkutil::CreateMode::Persistent);
 
     static constexpr int MAX_TRIES_TO_EXECUTE = 3;
@@ -828,8 +839,11 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
     zkutil::EventPtr event = std::make_shared<Poco::Event>();
     /// We must use exists request instead of get, because zookeeper will not setup event
     /// for non existing node after get request
+    // 在 is_executed_path上进行监听，这样，当task执行完成(可能是自己执行完成的，但是无所谓)，就会收到通知
+    // 很可能这个节点当前还不存在，这时候通过exists()也照样能创建监听，而用get()的话，假如节点不存在，则无法创建监听
     if (zookeeper->exists(is_executed_path, nullptr, event))
     {
+        // is_executed_path已经存在，说明任务已经被其他的replica执行了
         LOG_DEBUG(log, "Task {} has already been executed by replica ({}) of the same shard.", task.entry_name, zookeeper->get(is_executed_path));
         if (auto op = task.getOpToUpdateLogPointer())
             task.ops.push_back(op);
@@ -854,6 +868,9 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
     {
         ReplicatedTableStatus status;
         // Has to get with zk fields to get active replicas field
+        // 根据当前的 StorageReplicatedMergeTree，设置ReplicatedTableStatus
+        // 这里，只要当前的 Replica是leader，那么status.is_leader=true，并且根据新版本的ClickHouse的设置，所有的replica在正常情况下都是leader,
+        // 对于tryExecuteQueryOnLeaderReplica，
         replicated_storage->getStatus(status, true);
 
         // Should return as soon as possible if the table is dropped or detached, so we will release StoragePtr
@@ -874,6 +891,8 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
             throw Exception(ErrorCodes::NOT_A_LEADER, "Cannot execute initial query on non-leader replica");
 
         /// Any replica which is leader tries to take lock
+        // 这里的is_leader并不代表已经被选为即将执行这个SQL的节点，只是说当前的replica是leader replica(ClickHouse允许多leader)
+        // 只有是leader 的replica，才有可能参与后续的执行权的竞争
         if (status.is_leader && execute_on_leader_lock->tryLock())
         {
             /// In replicated merge tree we can have multiple leaders. So we can
@@ -890,35 +909,36 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
 
             /// Checking and incrementing counter exclusively.
             size_t counter = parse<int>(zookeeper->get(tries_to_execute_path));
-            if (counter > MAX_TRIES_TO_EXECUTE)
+            if (counter > MAX_TRIES_TO_EXECUTE) // 执行次数超过了 MAX_TRIES_TO_EXECUTE
             {
                 /// Replicated databases have their own retries, limiting retries here would break outer retries
                 bool is_replicated_database_task = dynamic_cast<DatabaseReplicatedTask *>(&task);
-                if (is_replicated_database_task)
+                if (is_replicated_database_task) // 如果这是一个DatabaseReplicatedTask，不是普通的ReplicatedTask
                     extra_attempt_for_replicated_database = true;
                 else
                     break;
             }
-
+            // tries_to_execute_path 路径上的计数器+1
             zookeeper->set(tries_to_execute_path, toString(counter + 1));
 
-            task.ops.push_back(create_shard_flag);
+            task.ops.push_back(create_shard_flag); // 既然自己准备执行，那么就将对应的is_executed_path创建请求放入ops中
             SCOPE_EXIT_MEMORY({ if (!executed_by_us && !task.ops.empty()) task.ops.pop_back(); });
 
             /// If the leader will unexpectedly changed this method will return false
             /// and on the next iteration new leader will take lock
-            if (tryExecuteQuery(task, zookeeper))
+            if (tryExecuteQuery(task, zookeeper)) // 执行
             {
-                executed_by_us = true;
+                executed_by_us = true; // 执行成功，退出
                 break;
             }
             else if (extra_attempt_for_replicated_database)
                 break;
         }
-
+        // 如果是自己拿到锁并执行成功了，代码不会走到这里，而是直接break了
         /// Waiting for someone who will execute query and change is_executed_path node
         if (event->tryWait(std::uniform_int_distribution<int>(0, 1000)(rng)))
         {
+            // 任务已经被执行成功了，因为已经拿到了 is_executed_path 节点的event
             LOG_DEBUG(log, "Task {} has already been executed by replica ({}) of the same shard.", task.entry_name, zookeeper->get(is_executed_path));
             executed_by_other_leader = true;
             if (auto op = task.getOpToUpdateLogPointer())
@@ -927,13 +947,14 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
         }
         else
         {
+            // 等了好久，还是没有等到is_executed_path节点出现，说明还是没执行成功
             String tries_count;
             zookeeper->tryGet(tries_to_execute_path, tries_count);
             if (parse<int>(tries_count) > MAX_TRIES_TO_EXECUTE)
             {
                 /// Nobody will try to execute query again
                 LOG_WARNING(log, "Maximum retries count for task {} exceeded, cannot execute replicated DDL query", task.entry_name);
-                break;
+                break; // 不再尝试，其它节点拿到的事相同的tries_count，也不会再尝试
             }
             else
             {
@@ -942,12 +963,13 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
             }
         }
     }
-
+    //  executed_by_us 和 executed_by_other_leader不可能同时为true
     chassert(!(executed_by_us && executed_by_other_leader));
 
     /// Not executed by leader so was not executed at all
     if (!executed_by_us && !executed_by_other_leader)
     {
+        // 如果既没有被自己也没有被别的leader执行
         /// If we failed with timeout
         if (stopwatch.elapsedSeconds() >= MAX_EXECUTION_TIMEOUT_SEC)
         {
@@ -964,9 +986,9 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
         return false;
     }
 
-    if (executed_by_us)
+    if (executed_by_us) // 自己执行的
         LOG_DEBUG(log, "Task {} executed by current replica", task.entry_name);
-    else // if (executed_by_other_leader)
+    else // if (executed_by_other_leader) // 别人执行的
         LOG_DEBUG(log, "Task {} has already been executed by replica ({}) of the same shard.", task.entry_name, zookeeper->get(is_executed_path));
 
     return true;

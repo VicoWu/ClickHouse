@@ -39,7 +39,7 @@ inline void checkNoOldLeaders(LoggerPtr log, ZooKeeper & zookeeper, const String
             throw KeeperException::fromPath(code, path);
 
         Coordination::Requests ops;
-
+        // 一个节点都没有，则创建新版的leader_election-0节点，内容为`all (multiple leaders Ok)`
         if (potential_leaders.empty())
         {
             /// Ensure that no leaders appeared and enable persistent multi-leader mode
@@ -53,18 +53,19 @@ inline void checkNoOldLeaders(LoggerPtr log, ZooKeeper & zookeeper, const String
         {
             ::sort(potential_leaders.begin(), potential_leaders.end());
             if (potential_leaders.front() == persistent_multiple_leaders)
-                return;
+                return; // 序号最低的节点，已经是新版本的持久化的节点
 
+            // 当前序号最小的节点不是最新版的持久化节点，因此进一步判断
             /// Ensure that current leader supports multi-leader mode and make it persistent
             auto current_leader = fs::path(path) / potential_leaders.front();
             Coordination::Stat leader_stat;
             String identifier;
             if (!zookeeper.tryGet(current_leader, identifier, &leader_stat))
-            {
+            {   // 刚刚list的结果，现在进行get，却失败，因此再重新list
                 LOG_INFO(log, "LeaderElection: leader suddenly changed, will retry");
                 continue;
             }
-
+            // 查看当前leader节点的内容，如果不是multi-leader的内容，则报错
             if (!identifier.ends_with(suffix))
                 throw Poco::Exception(fmt::format("Found leader replica ({}) with too old version (< 20.6). Stop it before upgrading", identifier));
 
@@ -76,14 +77,14 @@ inline void checkNoOldLeaders(LoggerPtr log, ZooKeeper & zookeeper, const String
         }
 
         Coordination::Responses res;
-        code = zookeeper.tryMulti(ops, res);
+        code = zookeeper.tryMulti(ops, res); // 批量发送请求，创建multi-leader节点
         if (code == Coordination::Error::ZOK)
             return;
         else if (code == Coordination::Error::ZNOTEMPTY || code == Coordination::Error::ZNODEEXISTS || code == Coordination::Error::ZNONODE)
             LOG_INFO(log, "LeaderElection: leader suddenly changed or new node appeared, will retry");
         else
             KeeperMultiException::check(code, ops, res);
-    }
+    } // 重试
 
     throw Poco::Exception("Cannot check that no old leaders exist");
 }

@@ -4289,17 +4289,17 @@ void StorageReplicatedMergeTree::removePartAndEnqueueFetch(const String & part_n
 void StorageReplicatedMergeTree::startBeingLeader()
 {
     auto zookeeper = getZooKeeper();
-
+    // 如果 replicated_can_become_leader=false，那么所有的replica都不会成为leader
     if (!getSettings()->replicated_can_become_leader)
     {
         LOG_INFO(log, "Will not enter leader election because replicated_can_become_leader=0");
         return;
     }
-
+    // 检查并确认没有旧版本的leader节点
     zkutil::checkNoOldLeaders(log.load(), *zookeeper, fs::path(zookeeper_path) / "leader_election");
 
     LOG_INFO(log, "Became leader");
-    is_leader = true;
+    is_leader = true; // 无条件成为leader，没有任何的竞争，所以，所有的replica都会成为leader
 }
 
 void StorageReplicatedMergeTree::stopBeingLeader()
@@ -7025,7 +7025,7 @@ void StorageReplicatedMergeTree::getStatus(ReplicatedTableStatus & res, bool wit
     auto zookeeper = tryGetZooKeeper();
     const auto storage_settings_ptr = getSettings();
 
-    res.is_leader = is_leader;
+    res.is_leader = is_leader; // 可以看到，只要
     res.can_become_leader = storage_settings_ptr->replicated_can_become_leader;
     res.is_readonly = is_readonly;
     res.is_session_expired = !zookeeper || zookeeper->expired();
