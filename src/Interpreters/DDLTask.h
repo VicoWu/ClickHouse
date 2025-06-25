@@ -104,7 +104,7 @@ struct DDLTaskBase
 
     DDLLogEntry entry;
 
-    String host_id_str;
+    String host_id_str; // 当前的ClickHouse Server的节点
     ASTPtr query;
 
     String query_str;
@@ -116,8 +116,8 @@ struct DDLTaskBase
 
     Coordination::Requests ops;
     ExecutionStatus execution_status;
-    bool was_executed = false;
-
+    bool was_executed = false; // 仅仅标记Task已经执行完成(可能失败)，但是相应的状态还没有完成更新
+    // task执行完成(可能失败)，并且keeper上的状态也完成了更新
     std::atomic_bool completely_processed = false;
 
     DDLTaskBase(const String & name, const String & path) : entry_name(name), entry_path(path) {}

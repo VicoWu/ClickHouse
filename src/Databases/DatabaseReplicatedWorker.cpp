@@ -175,6 +175,9 @@ void DatabaseReplicatedDDLWorker::initializeReplication()
     active_node_holder = zkutil::EphemeralNodeHolder::existing(active_path, *active_node_holder_zookeeper);
 }
 
+/**
+ *  在DDLWorker中是virtual方法，动态绑定，因此DatabaseReplicatedDDLWorker::enqueueQuery重写了DDLWorker::enqueueQuery
+ */
 String DatabaseReplicatedDDLWorker::enqueueQuery(DDLLogEntry & entry)
 {
     auto zookeeper = getAndSetZooKeeper();
@@ -224,6 +227,7 @@ bool DatabaseReplicatedDDLWorker::waitForReplicaToProcessAllEntries(UInt64 timeo
 
 /**
  * 调用者是 DatabaseReplicatedDDLWorker::enqueueQuery
+ * 父类DDLWorker没有这个方法
  * 它的作用是将一个 DDL 查询写入 ZooKeeper 中的 DDL 日志队列，
  * 并为它分配一个唯一递增的编号，以确保所有副本都按相同的顺序执行 DDL。
  * @param zookeeper
@@ -235,6 +239,7 @@ bool DatabaseReplicatedDDLWorker::waitForReplicaToProcessAllEntries(UInt64 timeo
 String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookeeper, DDLLogEntry & entry,
                                DatabaseReplicated * const database, bool committed)
 {
+    // 可以看到，这里的Query Path是database->zookeeper_path, 即这个ReplicatedDatbase的zookeeper path
     const String query_path_prefix = database->zookeeper_path + "/log/query-";
 
     /// We cannot create sequential node and it's ephemeral child in a single transaction, so allocate sequential number another way
@@ -247,6 +252,7 @@ String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookee
     while (--iters) // 反复重试，直到成功创建一个sequential节点
     {
         Coordination::Requests ops;
+        //  ephemeral 节点，抢锁
         ops.emplace_back(zkutil::makeCreateRequest(counter_lock_path, database->getFullReplicaName(), zkutil::CreateMode::Ephemeral));
         // 创建一个 /counter/cnt为前缀的ephemeral的sequential节点，比如， /counter/cnt-00000123 节点
         ops.emplace_back(zkutil::makeCreateRequest(counter_prefix, "", zkutil::CreateMode::EphemeralSequential));
@@ -267,7 +273,8 @@ String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookee
                         "Cannot enqueue query, because some replica are trying to enqueue another query. "
                         "It may happen on high queries rate or, in rare cases, after connection loss. Client should retry.");
 
-    // 根据前面创建的 sequential 节点路径 counter_path，生成最终的 DDL 日志节点路径 node_path
+    // 根据前面创建的 sequential 节点路径 counter_path，生成最终的 DDL 日志节点路径 node_path，
+    // 比如，counter_path是/clickhouse/test_db/log/counter/cnt-0012，那么对应的node_path就是 /clickhouse/test_db/log/query-0012
     // /clickhouse/databases/db1/log/query-00000123
     String node_path = query_path_prefix + counter_path.substr(counter_prefix.size());
 
@@ -281,11 +288,13 @@ String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookee
     else
         ops.emplace_back(zkutil::makeCreateRequest(node_path + "/try", database->getFullReplicaName(), zkutil::CreateMode::Ephemeral));
     /// We don't need it anymore
+    // 已经成功创建了query节点，因此不再需要这个CreateMode::EphemeralSequential节点了
     ops.emplace_back(zkutil::makeRemoveRequest(counter_path, -1));
     /// Unlock counters
+    // 也不再需要counter_lock_path，即不再需要这个分布式互斥锁了
     ops.emplace_back(zkutil::makeRemoveRequest(counter_lock_path, -1));
     /// Create status dirs
-    // 状态目录，用于各副本跟踪执行进度
+    // 在query-00000012下一次性创建对应的状态子目录，用于各副本跟踪执行进度
     ops.emplace_back(zkutil::makeCreateRequest(node_path + "/active", "", zkutil::CreateMode::Persistent));
     ops.emplace_back(zkutil::makeCreateRequest(node_path + "/finished", "", zkutil::CreateMode::Persistent));
     ops.emplace_back(zkutil::makeCreateRequest(node_path + "/synced", "", zkutil::CreateMode::Persistent));
@@ -295,6 +304,12 @@ String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookee
     return node_path;
 }
 
+/**
+ * 这个方法与DDLWorker无关，是 DatabaseReplicatedDDLWorker 独有的方法
+ * @param entry
+ * @param query_context
+ * @return
+ */
 String DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry(DDLLogEntry & entry, ContextPtr query_context)
 {
     /// NOTE Possibly it would be better to execute initial query on the most up-to-date node,
@@ -359,6 +374,13 @@ String DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry(DDLLogEntry & entr
     return entry_path;
 }
 
+/**
+ * virtual方法initAndCheckTask，   重写了 DDLWorker::initAndCheckTask,
+ * @param entry_name
+ * @param out_reason
+ * @param zookeeper
+ * @return
+ */
 DDLTaskPtr DatabaseReplicatedDDLWorker::initAndCheckTask(const String & entry_name, String & out_reason, const ZooKeeperPtr & zookeeper)
 {
     {

@@ -75,7 +75,7 @@ DDLWorker::DDLWorker(
     const std::string & zk_root_dir,
     ContextPtr context_,
     const Poco::Util::AbstractConfiguration * config,
-    const String & prefix,
+    const String & prefix, // DDLWorker
     const String & logger_name,
     const CurrentMetrics::Metric * max_entry_metric_,
     const CurrentMetrics::Metric * max_pushed_entry_metric_)
@@ -109,7 +109,7 @@ DDLWorker::DDLWorker(
         max_tasks_in_queue = std::max<UInt64>(1, config->getUInt64(prefix + ".max_tasks_in_queue", max_tasks_in_queue));
 
         if (config->has(prefix + ".host_name"))
-            config_host_name = config->getString(prefix + ".host_name");
+            config_host_name = config->getString(prefix + ".host_name"); // DDLWorker.host_name
 
         if (config->has(prefix + ".profile"))
             context->setSetting("profile", config->getString(prefix + ".profile"));
@@ -169,15 +169,22 @@ ZooKeeperPtr DDLWorker::getAndSetZooKeeper()
     return current_zookeeper;
 }
 
-
+/**
+ *  DatabaseReplicatedDDLWorker::initAndCheckTask 重写了该方法，这是一个virtual方法
+ *  将Entry转换成对应的DDLTask
+ * @param entry_name
+ * @param out_reason
+ * @param zookeeper
+ * @return
+ */
 DDLTaskPtr DDLWorker::initAndCheckTask(const String & entry_name, String & out_reason, const ZooKeeperPtr & zookeeper)
 {
     if (entries_to_skip.contains(entry_name))
         return {};
 
-    String node_data;
+    String node_data; // 这个task entry的内容
     String entry_path = fs::path(queue_dir) / entry_name;
-
+    // 创建对应的DDLTask
     auto task = std::make_unique<DDLTask>(entry_name, entry_path);
 
     if (!zookeeper->tryGet(entry_path, node_data))
@@ -218,6 +225,9 @@ DDLTaskPtr DDLWorker::initAndCheckTask(const String & entry_name, String & out_r
     /// Stage 2: resolve host_id and check if we should execute query or not
     /// Multiple clusters can use single DDL queue path in ZooKeeper,
     /// So we should skip task if we cannot find current host in cluster hosts list.
+    //在这个task的host list中查看有没有config_host_name,以确定自己是否需要执行这个Task
+    // 如果用户配置了DDLWorker.host_name，那么config_host_name就是用户配置的值
+    // 如果这个DDLTask中的hosts list中根本没有本机，那么本机不会执行
     if (!task->findCurrentHostID(context, log, zookeeper, config_host_name))
     {
         out_reason = "There is no a local address in host list";
@@ -237,9 +247,9 @@ DDLTaskPtr DDLWorker::initAndCheckTask(const String & entry_name, String & out_r
     {
         out_reason = "Cannot parse query or obtain cluster info";
         write_error_status(task->host_id_str, ExecutionStatus::fromCurrentException(), out_reason);
-        return add_to_skip_set();
+        return add_to_skip_set(); // 将当前的entry添加到skip list中
     }
-
+    // 这个task已经被 **当前机器**执行完成
     if (zookeeper->exists(task->getFinishedNodePath()))
     {
         out_reason = TASK_PROCESSED_OUT_REASON;
@@ -276,19 +286,23 @@ void DDLWorker::scheduleTasks(bool reinitialized)
 
         assert(current_tasks.size() <= pool_size + (worker_pool != nullptr));
         auto task_it = current_tasks.begin();
+        // 优先将当前还没有执行的任务进行执行，随后才会尝试从Zookeeper上尝试获取新的任务
         while (task_it != current_tasks.end())
         {
             auto & task = *task_it;
-            if (task->completely_processed)
+            if (task->completely_processed) // 任务已经完全完成了，keeper上的状态也成功更新了
             {
+                // 一个已经 completely_processed的task，肯定是已经executed的状态
                 chassert(task->was_executed);
                 /// Status must be written (but finished/ node may not exist if entry was deleted).
                 /// If someone is deleting entry concurrently, then /active status dir must not exist.
+                // 如果 task->completely_processed， 那么 不可能 query-000000032/finished/hostname:port不存在，并且 query-000000032/active 存在
                 assert(zookeeper->exists(task->getFinishedNodePath()) || !zookeeper->exists(fs::path(task->entry_path) / "active"));
-                ++task_it;
+                ++task_it; // 已经完全处理了，因此处理下一个任务
             }
-            else if (task->was_executed)
+            else if (task->was_executed) // 任务已经执行完成了，但是从  was_executed -> completely_processed 的状态没完成，可能是任务完成以后，keeper连接失效
             {
+                // `/clickhouse/task_queue/ddl/query-0000000123/finished/host1:port`
                 /// Connection was lost on attempt to write status. Will retry.
                 bool status_written = zookeeper->exists(task->getFinishedNodePath());
                 /// You might think that the following condition is redundant, because status_written implies completely_processed.
@@ -296,21 +310,21 @@ void DDLWorker::scheduleTasks(bool reinitialized)
                 /// if ZooKeeper successfully received and processed our request
                 /// but we lost connection while waiting for the response.
                 /// Yeah, distributed systems is a zoo.
-                if (status_written)
+                if (status_written) // 已经有了对应的/clickhouse/task_queue/ddl/query-0000000123/finished/host1:port，task的状态却只是 was_executed
                 {
                     /// TODO We cannot guarantee that query was actually executed synchronously if connection was lost.
                     /// Let's simple create synced/ node for now, but it would be better to pass UNFINISHED status to initiator
                     /// or wait for query to actually finish (requires https://github.com/ClickHouse/ClickHouse/issues/23513)
-                    task->createSyncedNodeIfNeed(zookeeper);
-                    task->completely_processed = true;
+                    task->createSyncedNodeIfNeed(zookeeper); // 只有ReplicatedDatabaseDDLTask才需要进行sync
+                    task->completely_processed = true; // 完全处理完成
                 }
-                else
+                else // task->was_executed为true，但是却没有写 `/clickhouse/task_queue/ddl/query-0000000123/finished/host1:port` 节点
                 {
-                    processTask(*task, zookeeper);
+                    processTask(*task, zookeeper); // 继续处理任务(有可能处理了一半)
                 }
-                ++task_it;
+                ++task_it; // 下一个任务
             }
-            else
+            else // task的状态连was_executed都没有到
             {
                 /// We didn't even executed a query, so let's just remove it.
                 /// We will try to read the task again and execute it from the beginning.
@@ -325,6 +339,7 @@ void DDLWorker::scheduleTasks(bool reinitialized)
         }
     }
 
+    // using Strings = std::vector<String>;
     Strings queue_nodes = zookeeper->getChildren(queue_dir, &queue_node_stat, queue_updated_event);
     size_t size_before_filtering = queue_nodes.size();
     filterAndSortQueueNodes(queue_nodes);
@@ -374,10 +389,12 @@ void DDLWorker::scheduleTasks(bool reinitialized)
     /// Maybe such asserts are too paranoid and excessive,
     /// but it's easy enough to break DDLWorker in a very unobvious way by making some minor change in code.
     [[maybe_unused]] bool have_no_tasks_info = !first_failed_task_name && current_tasks.empty() && !last_skipped_entry_name;
+    // String DDLWorker::enqueueQuery中可以看到，这里的entry_name 是前缀`query-`加上keeper的序号自动生成的
     assert(have_no_tasks_info || queue_nodes.end() == std::find_if(queue_nodes.begin(), queue_nodes.end(), [&](const String & entry_name)
     {
         /// We should return true if some invariants are violated.
         String reason;
+        // 将对应的entry转换成task，这里，如果这个Entry中的hosts不包含自己，那么会跳过
         auto task = initAndCheckTask(entry_name, reason, zookeeper);
         bool maybe_currently_processing = current_tasks.end() != std::find_if(current_tasks.begin(), current_tasks.end(), [&](const auto & t)
         {
@@ -412,31 +429,36 @@ void DDLWorker::scheduleTasks(bool reinitialized)
         LOG_TRACE(log, "Checking task {}", entry_name);
 
         String reason;
+        // // 将对应的entry转换成task，这里，如果这个Entry中的hosts不包含自己，那么会跳过
         auto task = initAndCheckTask(entry_name, reason, zookeeper);
-        if (task)
+        if (task) // 成功地将Entry转换成了task
         {
             queue_fully_loaded_after_initialization_debug_helper = true;
         }
         else
         {
+            // 没有成功地将这个Entry转换成task
             LOG_DEBUG(log, "Will not execute task {}: {}", entry_name, reason);
             updateMaxDDLEntryID(entry_name);
             last_skipped_entry_name.emplace(entry_name);
             continue;
         }
-
+        // 通过校验，把这个task放到内存中，下面将会处理
         auto & saved_task = saveTask(std::move(task));
 
         if (worker_pool)
         {
             worker_pool->scheduleOrThrowOnError([this, &saved_task, zookeeper]()
             {
+                // 在这里进行异步调用，提交即返回，不用等执行结果
                 setThreadName("DDLWorkerExec");
+                // 开始处理这个task，这里会进一步调用taskShouldBeExecutedOnLeader，因此也有可能不执行
                 processTask(saved_task, zookeeper);
             });
         }
         else
         {
+            // 直接在当前线程中同步执行
             processTask(saved_task, zookeeper);
         }
     }
@@ -466,6 +488,11 @@ DDLTaskBase & DDLWorker::saveTask(DDLTaskPtr && task)
     return *current_tasks.back();
 }
 
+/**
+ * 非virtual方法，因此 DatabaseReplicatedDDLWorker 没有重写这个方法
+ * @param task
+ * @param zookeeper
+ * @return
 bool DDLWorker::tryExecuteQuery(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
 {
     /// Add special comment at the start of query to easily identify DDL-produced queries in query_log
@@ -546,12 +573,17 @@ bool DDLWorker::tryExecuteQuery(DDLTaskBase & task, const ZooKeeperPtr & zookeep
     return true;
 }
 
+/**
+ * 不是virtual方法，因此子类DatabaseReplicated没有重写该方法
+ * 线程安全地更新这个DDLWorker的max_id值，即ClickHouse Server内存中的max_id值
+ * @param entry_name
+ */
 void DDLWorker::updateMaxDDLEntryID(const String & entry_name)
 {
     // 从 ZooKeeper 的 entry 名称中提取出数值型的 ID，例如从 "query-0000001234" 提取出 1234。
     UInt32 id = DDLTaskBase::getLogEntryNumber(entry_name);
     auto prev_id = max_id.load(std::memory_order_relaxed);
-    while (prev_id < id)
+    while (prev_id < id) // 只要当前内存的值小于这个entry的序号
     {
         // 原子操作，只有当 prev_id == max_id 时才会成功把 max_id 改成 id；
         // 如果有别的线程也在更新，它会失败，并自动把最新的 max_id 放到 prev_id 中，进入下一轮比较
@@ -565,7 +597,9 @@ void DDLWorker::updateMaxDDLEntryID(const String & entry_name)
 }
 
 /**
+ * 非virtual方法，静态绑定，因此DatabaseReplicatedWorker也是使用这个方法来执行
  * 在分布式环境下安全、幂等地执行一个 DDL 任务，并将其状态（active、finished、synced）记录在 ZooKeeper 中
+ * 在这里，执行以前，会进一步判断这个Task是否只应该在Leader上执行
 */
 void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
 {
@@ -596,15 +630,18 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
      * 每个任务有一个 active 节点，代表“当前有一个 ClickHouse 实例正在执行此任务”。
      * 使用 ephemeral 节点，断线或 crash 自动消失。
      * canary_value 是当前服务器 UUID，方便比对。
+     *
+     * `/clickhouse/task_queue/ddl/query-0000000123/active/host1:port`
      */
     auto create_active_res = zookeeper->tryCreate(active_node_path, canary_value, zkutil::CreateMode::Ephemeral);
-    if (create_active_res != Coordination::Error::ZOK)
+    if (create_active_res != Coordination::Error::ZOK) // 没有成功创建active节点
     {
         if (create_active_res != Coordination::Error::ZNONODE && create_active_res != Coordination::Error::ZNODEEXISTS)
         {
             chassert(Coordination::isHardwareError(create_active_res));
             throw Coordination::Exception::fromPath(create_active_res, active_node_path);
         }
+        // 如果create_active_res的状态是节点存在或者节点不存在，那么都需要重新创建节点
 
         /// Status dirs were not created in enqueueQuery(...) or someone is removing entry
         if (create_active_res == Coordination::Error::ZNONODE) // 说明 entry 被删了，跳过。
@@ -623,14 +660,14 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
             }
             createStatusDirs(task.entry_path, zookeeper);
         }
-        // 说明是重试场景，尝试删除旧的 ephemeral 节点。
+        // 这个节点已经存在了，说明是重试场景，尝试删除旧的 ephemeral 节点。
         if (create_active_res == Coordination::Error::ZNODEEXISTS)
         {
             /// Connection has been lost and now we are retrying,
             /// but our previous ephemeral node still exists.
             zookeeper->deleteEphemeralNodeIfContentMatches(active_node_path, canary_value);
         }
-        // 创建一个代表当前任务是active状态的临时节点
+        // 再次尝试创建一个代表当前任务是active状态的临时节点
         zookeeper->create(active_node_path, canary_value, zkutil::CreateMode::Ephemeral);
     }
 
@@ -639,16 +676,17 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
     std::unique_ptr<zkutil::ZooKeeperLock> execute_on_leader_lock;
 
     /// Step 2: Execute query from the task.
-    if (!task.was_executed)
+    if (!task.was_executed) // 开始执行任务
     {
         /// If table and database engine supports it, they will execute task.ops by their own in a single transaction
         /// with other zk operations (such as appending something to ReplicatedMergeTree log, or
         /// updating metadata in Replicated database), so we make create request for finished_node_path with status "0",
         /// which means that query executed successfully.
         /**
-         * 会将任务的 ops 填充为：删除 active 节点, 创建 finished 节点，写入执行状态（成功/失败）。
+         * 会将任务的 ops 填充为：删除 active 节点, 创建 finished 节点(持久化节点，而非临时节点)，写入执行状态（成功/失败）。
          */
         task.ops.emplace_back(zkutil::makeRemoveRequest(active_node_path, -1));
+        // 在finished节点中写入状态码0，代表执行成功
         task.ops.emplace_back(zkutil::makeCreateRequest(finished_node_path, ExecutionStatus(0).serializeText(), zkutil::CreateMode::Persistent));
 
         try
@@ -677,7 +715,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
             }
             else
             {
-                // 普通执行
+                // 普通执行，所有的replica上都执行
                 storage.reset();
                 tryExecuteQuery(task, zookeeper);
             }
@@ -694,22 +732,23 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
             task.execution_status = ExecutionStatus::fromCurrentException("An error occurred before execution");
         }
 
-        if (task.execution_status.code != 0)
+        if (task.execution_status.code != 0) // 任务的执行状态码非0
         {
             bool status_written_by_table_or_db = task.ops.empty();
             bool is_replicated_database_task = dynamic_cast<DatabaseReplicatedTask *>(&task);
             if (status_written_by_table_or_db || is_replicated_database_task)
-            {
+            {   // 如果是replicated_database_task，那么直接返回失败
                 throw Exception(ErrorCodes::UNFINISHED, "Unexpected error: {}", task.execution_status.message);
             }
             else
             {
                 /// task.ops where not executed by table or database engine, so DDLWorker is responsible for
                 /// writing query execution status into ZooKeeper.
+                // 如果不是replicated database task，那么这个DDLWorker有义务将执行的状态码写入到finished_node_path中
                 task.ops.emplace_back(zkutil::makeSetRequest(finished_node_path, task.execution_status.serializeText(), -1));
             }
         }
-
+        // task执行完成(有可能成功，有可能失败)，但是还没有开始更新zookeeper上节点状态
         /// We need to distinguish ZK errors occurred before and after query executing
         task.was_executed = true;
     }
@@ -720,7 +759,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
     /// NOTE: If both table and database are replicated, task is executed in single ZK transaction.
 
     bool status_written = task.ops.empty();
-    if (!status_written)
+    if (!status_written) // 需要写入keeper ops
     {
         /**
          * 执行剩余所有 ZooKeeper 操作（原子提交）：
@@ -736,10 +775,13 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
 
     /// Active node was removed in multi ops
     active_node->setAlreadyRemoved();
-
+    /**
+     * 普通的DDLTask没有实现该方法，即什么都不做
+     * 但是DatabaseReplicatedTask::createSyncedNodeIfNeed重写了该方法
+     */
     task.createSyncedNodeIfNeed(zookeeper);
     updateMaxDDLEntryID(task.entry_name); // 更新max_id的值
-    task.completely_processed = true;
+    task.completely_processed = true; // 完全完成，任务执行完成，同时完成了Keeper上的任务维护
     subsequent_errors_count = 0;
 }
 
@@ -1121,7 +1163,11 @@ void DDLWorker::createStatusDirs(const std::string & node_path, const ZooKeeperP
     zkutil::KeeperMultiException::check(code, ops, responses);
 }
 
-
+/**
+ * 这是virtual方法，在DatabaseReplicatedDDLWorker::enqueueQuery重载了该方法
+ * @param entry
+ * @return
+ */
 String DDLWorker::enqueueQuery(DDLLogEntry & entry)
 {
     if (entry.hosts.empty())
@@ -1132,6 +1178,7 @@ String DDLWorker::enqueueQuery(DDLLogEntry & entry)
     String query_path_prefix = fs::path(queue_dir) / "query-";
     zookeeper->createAncestors(query_path_prefix);
 
+    // 这里的entry的文件名字是根据 zkutil::CreateMode::PersistentSequential自动生成的
     String node_path = zookeeper->create(query_path_prefix, entry.toString(), zkutil::CreateMode::PersistentSequential);
     if (max_pushed_entry_metric)
     {

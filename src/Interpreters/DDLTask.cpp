@@ -39,11 +39,12 @@ HostID HostID::fromString(const String & host_port_str)
     return res;
 }
 
-
+// 查看这个HostID对象中存放的这个host是否就是当前机器
 bool HostID::isLocalAddress(UInt16 clickhouse_port) const
 {
     try
     {
+        // 对HostID中存放的hostname:port进行解析，然后看一
         return DB::isLocalAddress(DNSResolver::instance().resolveAddress(host_name, port), clickhouse_port);
     }
     catch (const DB::NetException &)
@@ -210,6 +211,11 @@ void DDLTaskBase::formatRewrittenQuery(ContextPtr context)
     query_for_logging = query->formatForLogging(context->getSettingsRef().log_queries_cut_to_length);
 }
 
+/**
+ * DatabaseReplicated 重写了这个方法
+ * @param from_context
+ * @return
+ */
 ContextMutablePtr DDLTaskBase::makeQueryContext(ContextPtr from_context, const ZooKeeperPtr & /*zookeeper*/)
 {
     auto query_context = Context::createCopy(from_context);
@@ -221,7 +227,9 @@ ContextMutablePtr DDLTaskBase::makeQueryContext(ContextPtr from_context, const Z
     return query_context;
 }
 
-
+/**
+ * 在这个DDLTask中所有的Hosts中检查是否有本机
+ */
 bool DDLTask::findCurrentHostID(ContextPtr global_context, LoggerPtr log, const ZooKeeperPtr & zookeeper, const std::optional<std::string> & config_host_name)
 {
     bool host_in_hostlist = false;
@@ -242,8 +250,11 @@ bool DDLTask::findCurrentHostID(ContextPtr global_context, LoggerPtr log, const 
                 *config_host_name);
     }
 
+    // 遍历task entry中存放的应该执行这个task的所有task的hosts，
+    // 看看有没有当前的这个config_host_name
     for (const HostID & host : entry.hosts)
     {
+        // 如果用户的确配置了 DDLWorker.host_name, 则应该使用 DDLWorker.host_name进行匹配，不考虑使用DNS Resolving进行匹配
         if (config_host_name)
         {
             if (config_host_name != host.host_name)
@@ -252,12 +263,13 @@ bool DDLTask::findCurrentHostID(ContextPtr global_context, LoggerPtr log, const 
             if (maybe_secure_port != host.port && port != host.port)
                 continue;
 
+            // 通过 config_host_name 匹配到了，这是ClickHouse Admin在这个Host上单独为DDLTask进行的配置，可以看DDLTask的初始化代码
             host_in_hostlist = true;
             host_id = host;
             host_id_str = host.toString();
-            break;
+            break; // 只要配置了 config_host_name， 则一定跳出循环，说明只要配置了config_host_name，就一定不在考虑动态DNS解析
         }
-
+        // 用户没有配置 DDLWorker.host_name
         try
         {
             /// The port is considered local if it matches TCP or TCP secure port that the server is listening.
@@ -279,7 +291,7 @@ bool DDLTask::findCurrentHostID(ContextPtr global_context, LoggerPtr log, const 
             /// We will rethrow exception if we don't find local host in the list.
             continue;
         }
-
+        //  执行到这里，说明is_local_port = true
         if (host_in_hostlist)
         {
             /// This check could be slow a little bit
@@ -289,10 +301,11 @@ bool DDLTask::findCurrentHostID(ContextPtr global_context, LoggerPtr log, const 
         else
         {
             host_in_hostlist = true;
-            host_id = host;
-            host_id_str = host.toString();
+            host_id = host; // DDLTask中的HostID
+            host_id_str = host.toString(); // 直接使用DDLTask中Entry中的HostID的host string
         }
     }
+    // 在Task的Hosts中没有找到当前的host(自己)
 
     if (!host_in_hostlist && first_exception)
     {
@@ -495,26 +508,38 @@ void DatabaseReplicatedTask::parseQueryFromEntry(ContextPtr context)
     formatRewrittenQuery(context);
 }
 
+/**
+ * 重写了父类的DDLTaskBase::makeQueryContext()方法
+ * @param from_context
+ * @param zookeeper
+ * @return
+ */
 ContextMutablePtr DatabaseReplicatedTask::makeQueryContext(ContextPtr from_context, const ZooKeeperPtr & zookeeper)
 {
+    // 先调用父类的 DDLTaskBase::makeQueryContext,
     auto query_context = DDLTaskBase::makeQueryContext(from_context, zookeeper);
     query_context->setQueryKind(ClientInfo::QueryKind::SECONDARY_QUERY);
     // 这里的含义是，这里的数据库虽然是DatabaseReplicated，但是当前执行的正是这个分布式task的一个子task，因此不需要再进行分布式执行了
-    // 设置 is_replicated_database_internal
+    // 设置 is_replicated_database_internal，明确告知，这是内部副本的同步任务，这不是分布式 ON CLUSTER 执行，不需要再分发。
     query_context->setQueryKindReplicatedDatabaseInternal();
     query_context->setCurrentDatabase(database->getDatabaseName());
 
     auto txn = std::make_shared<ZooKeeperMetadataTransaction>(zookeeper, database->zookeeper_path, is_initial_query, entry_path);
     query_context->initZooKeeperMetadataTransaction(txn);
 
+    // 如果是发起方，添加 try/committed/max_log_ptr 写入请求
+    // 发起方要负责设置 task 的 committed 状态，以及推进 log pointer。
     if (is_initial_query)
     {
+        // 在Entry的路径下面设置/try节点和committed节点，代表这个task的状态
         txn->addOp(zkutil::makeRemoveRequest(entry_path + "/try", -1));
         txn->addOp(zkutil::makeCreateRequest(entry_path + "/committed", host_id_str, zkutil::CreateMode::Persistent));
+        // 将max_log_ptr设置为当前的Entry的id，比如query-00000023，提取出来就是23，设置为max_log_ptr的值
+        // 这里的max_log_ptr是一个全局的文件，即当前这个ReplicatedDatabase的所有的task的最大路径
         txn->addOp(zkutil::makeSetRequest(database->zookeeper_path + "/max_log_ptr", toString(getLogEntryNumber(entry_name)), -1));
     }
 
-    txn->addOp(getOpToUpdateLogPointer());
+    txn->addOp(getOpToUpdateLogPointer()); // 更新这个副本的执行位置
 
     for (auto & op : ops)
         txn->addOp(std::move(op));
@@ -523,18 +548,37 @@ ContextMutablePtr DatabaseReplicatedTask::makeQueryContext(ContextPtr from_conte
     return query_context;
 }
 
+/**
+ * 将当前副本在执行该 DDL task 后的位置 log_ptr 更新到 ZooKeeper 中，标记该副本已经处理到了这条日志
+ * 这个 log pointer 有两个重要用途：
+
+   1.  在副本启动时恢复进度
+        - 每个副本知道自己最后一次处理到了哪个 DDL 任务；
+        - 启动时可以从 log/ 中的下一个 entry 开始继续执行。
+
+   2. 用于 log/ 日志的垃圾回收
+      - 所有副本的 log_ptr 取最小值作为 safe point；
+      - 比这个值更早的日志可以被 GC 掉
+ * @return
+ */
 Coordination::RequestPtr DatabaseReplicatedTask::getOpToUpdateLogPointer()
 {
     return zkutil::makeSetRequest(database->replica_path + "/log_ptr", toString(getLogEntryNumber(entry_name)), -1);
 }
 
+/**
+ * 重写了DDLTask::createSyncedNodeIfNeed()方法, 即普通的ON CLUSTER任务不需要考虑同步，
+ * 但是如果是ReplicatedDatabase任务，则需要考虑同步
+ * @param zookeeper
+ */
 void DatabaseReplicatedTask::createSyncedNodeIfNeed(const ZooKeeperPtr & zookeeper)
 {
     assert(!completely_processed);
-    if (!entry.settings)
+    if (!entry.settings) // 部分任务（如非 SQL 任务、内部生成任务）没有附加 settings，就无需考虑同步标志。
         return;
 
     Field value;
+    // 如果设置 database_replicated_enforce_synchronous_settings 为false(默认为false)，那么不进行同步
     if (!entry.settings->tryGet("database_replicated_enforce_synchronous_settings", value))
         return;
 
@@ -542,7 +586,8 @@ void DatabaseReplicatedTask::createSyncedNodeIfNeed(const ZooKeeperPtr & zookeep
     assert(value.getType() == Field::Types::Bool || value.getType() == Field::Types::UInt64);
     if (!value.safeGet<UInt64>())
         return;
-
+    // `/clickhouse/task_queue/query-00000123/synched/host1:port`
+    // 这一步用于通知 initiator（发起者）：该任务的所有副本都执行完了。
     zookeeper->createIfNotExists(getSyncedNodePath(), "");
 }
 
@@ -551,6 +596,11 @@ String DDLTaskBase::getLogEntryName(UInt32 log_entry_number)
     return zkutil::getSequentialNodeName("query-", log_entry_number);
 }
 
+/**
+ *  提取这个entry的名字中的序号，比如query-00000023中的23
+ * @param log_entry_name
+ * @return
+ */
 UInt32 DDLTaskBase::getLogEntryNumber(const String & log_entry_name)
 {
     constexpr const char * name = "query-";
