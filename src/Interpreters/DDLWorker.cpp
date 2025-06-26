@@ -72,6 +72,7 @@ constexpr const char * TASK_PROCESSED_OUT_REASON = "Task has been already proces
 
 DDLWorker::DDLWorker(
     int pool_size_,
+    // // 参考 DatabaseReplicatedDDLWorker::DatabaseReplicatedDDLWorker构造方法，可以看到DatabaseReplicatedDDLWorker的queue_dir是对应的Database的dir
     const std::string & zk_root_dir,
     ContextPtr context_,
     const Poco::Util::AbstractConfiguration * config,
@@ -267,6 +268,11 @@ static void filterAndSortQueueNodes(Strings & all_nodes)
     ::sort(all_nodes.begin(), all_nodes.end());
 }
 
+/**
+ * reinitialized = True 代表刚刚经历过一次keeper的重试并且恢复了过来，因此需要特别消息的处理任务
+ * ClickHouse 的 DDLWorker::scheduleTasks(bool reinitialized) 会确保任务按顺序（即 DDL queue 中的 entry ID 递增）被依次执行，避免顺序混乱、跳过或重复执行
+ * @param reinitialized
+ */
 void DDLWorker::scheduleTasks(bool reinitialized)
 {
     LOG_DEBUG(log, "Scheduling tasks");
@@ -277,6 +283,12 @@ void DDLWorker::scheduleTasks(bool reinitialized)
     /// To avoid duplication of some queries we should try to write execution status again.
     /// To avoid skipping of some entries which were not executed we should be careful when choosing begin_node to start from.
     /// NOTE: It does not protect from all cases of query duplication, see also comments in processTask(...)
+    // reinitialized = true, 说明主线程因为 ZooKeeper 掉线等异常重启过, 所以 current_tasks 里面可能有未写 status 的任务
+    // 这时我们要：
+    // - 检查这些旧任务是否已经在 ZooKeeper 上写入了 finished/ 节点
+    // - 如果没写就重新写（避免任务丢失）
+    // - 如果写了一半 ZooKeeper 掉了，也要补完 status
+
     if (reinitialized)
     {
         if (current_tasks.empty())
@@ -332,7 +344,7 @@ void DDLWorker::scheduleTasks(bool reinitialized)
                 /// Entry name always starts with "query-" and contain exactly 10 decimal digits
                 /// of log entry number (with leading zeros).
                 if (!first_failed_task_name || task->entry_name < *first_failed_task_name)
-                    first_failed_task_name = task->entry_name;
+                    first_failed_task_name = task->entry_name; // 找到一个序号更小的失败任务
 
                 task_it = current_tasks.erase(task_it);
             }
@@ -342,7 +354,7 @@ void DDLWorker::scheduleTasks(bool reinitialized)
     // using Strings = std::vector<String>;
     Strings queue_nodes = zookeeper->getChildren(queue_dir, &queue_node_stat, queue_updated_event);
     size_t size_before_filtering = queue_nodes.size();
-    filterAndSortQueueNodes(queue_nodes);
+    filterAndSortQueueNodes(queue_nodes); // 对节点进行排序
     /// The following message is too verbose, but it can be useful to debug mysterious test failures in CI
     LOG_TRACE(log, "scheduleTasks: initialized={}, size_before_filtering={}, queue_size={}, "
                    "entries={}..{}, "
@@ -367,10 +379,11 @@ void DDLWorker::scheduleTasks(bool reinitialized)
     {
         /// If we had failed tasks, then we should start from the first failed task.
         chassert(reinitialized);
+        // 设置重新执行的开始位置
         begin_node = std::lower_bound(queue_nodes.begin(), queue_nodes.end(), first_failed_task_name);
     }
     else
-    {
+    {  // 没有失败任务
         /// We had no failed tasks. Let's just choose the maximum entry we have previously seen.
         String last_task_name;
         if (!current_tasks.empty())
@@ -1218,8 +1231,8 @@ bool DDLWorker::initializeMainThread()
         {
             auto zookeeper = getAndSetZooKeeper();
             zookeeper->createAncestors(fs::path(queue_dir) / "");
-            initialized = true;
-            return true;
+            initialized = true; // 成功完成了初始化，有可能是第一次初始化，有可能是连接断开以后的初始化
+            return true; // 初始化成功
         }
         catch (const Coordination::Exception & e)
         {
@@ -1238,7 +1251,7 @@ bool DDLWorker::initializeMainThread()
         }
 
         /// Avoid busy loop when ZooKeeper is not available.
-        sleepForSeconds(5);
+        sleepForSeconds(5); //失败以后返回重试
     }
 
     return false;
@@ -1246,51 +1259,63 @@ bool DDLWorker::initializeMainThread()
 
 void DDLWorker::runMainThread()
 {
+    // 重置状态的回调函数
     auto reset_state = [&]()
     {
         initialized = false;
         /// It will wait for all threads in pool to finish and will not rethrow exceptions (if any).
         /// We create new thread pool to forget previous exceptions.
-        if (1 < pool_size)
+        if (1 < pool_size) // 重新创建Thread Pool
             worker_pool = std::make_unique<ThreadPool>(CurrentMetrics::DDLWorkerThreads, CurrentMetrics::DDLWorkerThreadsActive, CurrentMetrics::DDLWorkerThreadsScheduled, pool_size);
         /// Clear other in-memory state, like server just started.
-        current_tasks.clear();
+        current_tasks.clear(); //所以的内存中的任务清空
         last_skipped_entry_name.reset();
-        max_id = 0;
+        max_id = 0; // 最大id置位0
         LOG_INFO(log, "Cleaned DDLWorker state");
     };
 
     setThreadName("DDLWorker");
     LOG_DEBUG(log, "Starting DDLWorker thread");
 
-    while (!stop_flag)
+    while (!stop_flag) // 只有没有收到停止信号，则反复执行
     {
         try
         {
+            /**
+             * 如果 initialized == false ⇒ 表示刚刚经历过重启或 ZooKeeper 断连重连；
+             * 那么 reinitialized == true ⇒ 这轮调度是一次重启恢复之后的调度，我们要特别小心处理“未完成的任务”。
+            */
             bool reinitialized = !initialized;
 
             /// Reinitialize DDLWorker state (including ZooKeeper connection) if required
-            if (!initialized)
+            // 只要initialized为false，表示现在需要进行zookeeper的重新初始化才能开始任务的收集和执行
+            // 如果initialized=false，则initializeMainThread()会不断反复重试直到成功
+            if (!initialized) // 如果刚刚经历过reset
             {
                 /// Stopped
+                // 尝试进行重新的初始化，返回false，表示重新初始化失败，或者收到了stop_flag
+                // 如果返回true，代表初始化成功，因此在initializeMainThread()中会把initialized置为true，代表已经进行了成功初始化
                 if (!initializeMainThread())
                     break;
                 LOG_DEBUG(log, "Initialized DDLWorker thread");
             }
-
+            //  如果initialized=false，则initializeMainThread()会不断反复重试直到成功，
+            // 因此代码执行到这里，一定是已经重试成功了，即如果初始化不成功，就无法执行scheduleTasks
+            // reinitialized的含义是：刚刚是否从一次失败中刚刚恢复过来，如果的确是从一次失败中刚刚恢复过来，那么需要对这些task进行一些特殊处理
             cleanup_event->set();
-            scheduleTasks(reinitialized);
+            scheduleTasks(reinitialized); // 进行任务的收集和调度
             subsequent_errors_count = 0;
 
             LOG_DEBUG(log, "Waiting for queue updates");
-            queue_updated_event->wait();
+            queue_updated_event->wait(); //等待新的任务，而不是反复循环重试
         }
         catch (const Coordination::Exception & e)
         {
             subsequent_errors_count = 0;
+            // 如果是硬件类 ZooKeeper 错误（如 TCP 断连、session expired）， 那么无需reset_state，而是重建线程池，然后在下一次进行尝试继续
             if (Coordination::isHardwareError(e.code))
             {
-                initialized = false;
+                initialized = false; // 将initialized置为false，表示需要再次进行初始化，但是这个初始化不会重置任务
                 /// Wait for pending async tasks
                 if (1 < pool_size)
                     worker_pool = std::make_unique<ThreadPool>(CurrentMetrics::DDLWorkerThreads, CurrentMetrics::DDLWorkerThreadsActive, CurrentMetrics::DDLWorkerThreadsScheduled, pool_size);
@@ -1299,7 +1324,7 @@ void DDLWorker::runMainThread()
             else
             {
                 LOG_ERROR(log, "Unexpected ZooKeeper error, will try to restart main thread: {}", getCurrentExceptionMessage(true));
-                reset_state();
+                reset_state(); // 重置整个系统状态，说明是严重的失联
             }
             sleepForSeconds(1);
         }
