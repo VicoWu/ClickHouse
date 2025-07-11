@@ -216,7 +216,7 @@ class ClickHouseVersion:
     def __lt__(self, other: Any) -> bool:
         if not isinstance(self, type(other)):
             return NotImplemented
-        for part in ("major", "minor", "patch", "tweak"):
+        for part in ("major", "minor", "patch", "tweak"): # Version的大小比较，从大版本开始，一直比较到小版本
             if getattr(self, part) < getattr(other, part):
                 return True
             elif getattr(self, part) > getattr(other, part):
@@ -290,42 +290,49 @@ def get_version_from_repo(
     """Get a ClickHouseVersion from FILE_WITH_VERSION_PATH. When the `git` parameter is
     present, a proper `tweak` version part is calculated for case if the latest tag has
     a `new` type and greater than version in `FILE_WITH_VERSION_PATH`"""
-    versions = read_versions(versions_path)
+    versions = read_versions(versions_path)  # 从文件FILE_WITH_VERSION_PATH中读取版本信息
     cmake_version = ClickHouseVersion(
         versions["major"],
         versions["minor"],
         versions["patch"],
         versions["revision"],
-        git,
+        git,  # 从文件中并没有读取tweak信息
     )
     # Since 24.5 we have tags like v24.6.1.1-new, and we must check if the release
     # branch already has it's own commit. It's necessary for a proper tweak version
     if git is not None and git.latest_tag:
-        version_from_tag = get_version_from_tag(git.latest_tag)
+        version_from_tag = get_version_from_tag(git.latest_tag) # 从tag中获取version信息
         if (
-            version_from_tag.description == VersionType.NEW
-            and cmake_version < version_from_tag
+            version_from_tag.description == VersionType.NEW # 如果description是new，比如 v25.6.6.1-new
+            and cmake_version < version_from_tag # 并且 tag中的版本大于FILE_WITH_VERSION_PATH中的版本
         ):
             # We are in a new release branch without existing release.
             # We should change the tweak version to a `tweak_to_new`
-            cmake_version.tweak = git.tweak_to_new
+            cmake_version.tweak = git.tweak_to_new # 更新cmake版本的tweak的值
     return cmake_version
 
 
 def get_version_from_string(
-    version: str, git: Optional[Git] = None
+    version: str, # Version字符串，比如24.8.1.2
+        git: Optional[Git] = None
 ) -> ClickHouseVersion:
     validate_version(version)
     parts = version.split(".")
-    return ClickHouseVersion(parts[0], parts[1], parts[2], -1, git, parts[3])
+    return ClickHouseVersion(parts[0], # major = 24
+                             parts[1], # minor = 8
+                             parts[2], # patch = 1
+                             -1, # Revision = -1
+                             git,
+                             parts[3] # Tweak = 2
+                             )
 
 
 def get_version_from_tag(tag: str) -> ClickHouseVersion:
     Git.check_tag(tag)
-    tag, description = tag[1:].split("-", 1)
-    version = get_version_from_string(tag)
-    version.with_description(description)
-    return version
+    tag, description = tag[1:].split("-", 1) # tag = 24.8.11.1 description = stable/lts
+    version = get_version_from_string(tag) # 从tag中返回一个ClickhouseVersion对象
+    version.with_description(description) # 设置description
+    return version # 返回ClickHouse Version对象
 
 
 def version_arg(version: str) -> ClickHouseVersion:
