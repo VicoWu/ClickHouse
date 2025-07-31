@@ -227,6 +227,7 @@ public:
     using ShardsInfo = std::vector<ShardInfo>;
 
     const ShardsInfo & getShardsInfo() const { return shards_info; }
+    // 返回一个shard的列表，每个shard的李彪由他里面的replica组成一个字符串
     const AddressesWithFailover & getShardsAddresses() const { return addresses_with_failover; }
 
     /// Returns addresses of some replicas according to specified `only_shard_num` and `only_replica_num`.

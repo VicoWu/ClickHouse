@@ -306,6 +306,7 @@ String DatabaseReplicatedDDLWorker::enqueueQueryImpl(const ZooKeeperPtr & zookee
 
 /**
  * 这个方法与DDLWorker无关，是 DatabaseReplicatedDDLWorker 独有的方法
+ * 在 DatabaseReplicated::tryEnqueueReplicatedDDL中执行，即DatabaseReplicated委托DatabaseReplicatedDDLWorker来执行
  * @param entry
  * @param query_context
  * @return
@@ -356,7 +357,8 @@ String DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry(DDLLogEntry & entr
 
     if (zookeeper->expired() || stop_flag)
         throw Exception(ErrorCodes::DATABASE_REPLICATION_FAILED, "ZooKeeper session expired or replication stopped, try again");
-    // 调用 DDLWorker::processTask
+    // 调用 DDLWorker::processTask， 这里可以看到，这个DatabaseReplicatedWorker在往keerp上写入Entry以后，自己直接执行属于自己的这部分task，而不是
+    // 同其他follower一起领取任务
     processTask(*task, zookeeper);
     // 任务没有执行成功，抛出异常
     if (!task->was_executed)

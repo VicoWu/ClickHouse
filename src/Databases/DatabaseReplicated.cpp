@@ -982,6 +982,11 @@ void DatabaseReplicated::checkQueryValid(const ASTPtr & query, ContextPtr query_
     }
 }
 
+/**
+ * 定义在IDatabase中的virtual方法，只有DatabaseReplicated实现了这个方法
+ * 在InterpreterAlterQuery::executeToTable中被调用
+ * 这里不仅仅是enqueue，还会完成执行
+ */
 BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, ContextPtr query_context, QueryFlags flags)
 {
     waitDatabaseStarted();
@@ -1005,12 +1010,14 @@ BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, Contex
     entry.tracing_context = OpenTelemetry::CurrentContext();
     entry.is_backup_restore = flags.distributed_backup_restore;
     // 调用 DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry
+    // 委托DatabaesReplicatedWorker::tryEnqueueAndExecuteEntry来进行任务的时机执行
     String node_path = ddl_worker->tryEnqueueAndExecuteEntry(entry, query_context);
 
     Strings hosts_to_wait;
     Strings unfiltered_hosts = getZooKeeper()->getChildren(zookeeper_path + "/replicas");
 
     std::vector<String> paths;
+    // 获取注册进来的所有replica节点，因为在下面的getDistributedDDLStatus中需要等待所有节点执行完成
     for (const auto & host : unfiltered_hosts)
         paths.push_back(zookeeper_path + "/replicas/" + host + "/replica_group");
 
@@ -1022,6 +1029,8 @@ BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, Contex
             hosts_to_wait.push_back(unfiltered_hosts[i]);
     }
 
+    // 这是一个工具方法，hosts_to_wait是需要等待执行的所有节点，node_path是用来进行协调的zookeeper节点，是
+    // 搜索 BlockIO getDistributedDDLStatus，返回了一个BlockIO,这个BlockIO的pipeline是 DDLQueryStatusSource，即等待所有的Hosts都执行完成
     return getDistributedDDLStatus(node_path, entry, query_context, &hosts_to_wait);
 }
 

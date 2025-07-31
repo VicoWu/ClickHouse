@@ -7019,13 +7019,16 @@ bool StorageReplicatedMergeTree::tryWaitForReplicaToProcessLogEntry(
     return getZooKeeper()->waitForDisappear(path_to_wait_on, stop_waiting);
 }
 
-
+/**
+ * 从当前的StorageReplicatedMergeTree的状态中，拼接出对象
+ */
 void StorageReplicatedMergeTree::getStatus(ReplicatedTableStatus & res, bool with_zk_fields)
 {
     auto zookeeper = tryGetZooKeeper();
     const auto storage_settings_ptr = getSettings();
 
-    res.is_leader = is_leader; // 可以看到，只要
+    res.is_leader = is_leader; // 可以看到，只要StorageReplicatedMergeTree是is_leader，那么status就是is_leader
+    // 是否可以尝试成为leader，默认是true
     res.can_become_leader = storage_settings_ptr->replicated_can_become_leader;
     res.is_readonly = is_readonly;
     res.is_session_expired = !zookeeper || zookeeper->expired();

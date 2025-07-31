@@ -245,7 +245,15 @@ private:
     bool stop_waiting_offline_hosts = false;
 };
 
-
+/**
+ * 工具方法，这里会根据hosts_to_wait，来创建对应的BlockIO节点，这个IO节点的pipeline就是封装了等待逻辑的DDLQueryStatusSource
+ * 因此，随后，在 DDLQueryStatusSource::generate() 中，会按照这里的定义执行等待
+ * @param node_path
+ * @param entry
+ * @param context
+ * @param hosts_to_wait
+ * @return
+ */
 BlockIO getDistributedDDLStatus(const String & node_path, const DDLLogEntry & entry, ContextPtr context, const Strings * hosts_to_wait)
 {
     BlockIO io;
@@ -421,6 +429,11 @@ static NameSet getOfflineHosts(const String & node_path, const NameSet & hosts_t
     return offline;
 }
 
+/**
+ * 一个用来跟踪query的执行状态的ISource实现，比如分布式Query，
+ * 使用这个ISource实现作为BlockIO的pipeline，等待所有的hosts执行完成(或者超时)
+ * @return
+ */
 Chunk DDLQueryStatusSource::generate()
 {
     bool all_hosts_finished = num_hosts_finished >= waiting_hosts.size();

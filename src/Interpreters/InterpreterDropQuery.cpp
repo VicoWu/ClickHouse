@@ -219,6 +219,7 @@ BlockIO InterpreterDropQuery::executeToTableImpl(const ContextPtr & context_, AS
 
             query_to_send.if_empty = false;
             // 通过keeper来发布ReplicatedQuery的DDL
+            // IDatabase::tryEnqueueReplicatedDDL的virtual 方法，只有DatabaseReplicated实现了这个方法
             // 搜索方法 DatabaseReplicated::tryEnqueueReplicatedDDL
             return database->tryEnqueueReplicatedDDL(new_query_ptr, context_);
         }

@@ -373,6 +373,8 @@ void DDLTask::setClusterInfo(ContextPtr context, LoggerPtr log)
 
 bool DDLTask::tryFindHostInCluster()
 {
+    // 返回一个 AddressesWithFailover
+    // using AddressesWithFailover = std::vector<Addresses>
     const auto & shards = cluster->getShardsAddresses();
     bool found_exact_match = false;
     String default_database;
@@ -407,6 +409,7 @@ bool DDLTask::tryFindHostInCluster()
                         /// For other DDLs like CREATE USER, there is no database name and should be executed successfully.
                         if (query_with_table)
                         {
+                            // 如果这个query没有database信息
                             if (!query_with_table->database)
                                 throw Exception(ErrorCodes::INCONSISTENT_CLUSTER_DEFINITION,
                                                 "For a distributed DDL on circular replicated cluster its table name "
@@ -418,8 +421,8 @@ bool DDLTask::tryFindHostInCluster()
                     }
                 }
                 found_exact_match = true;
-                host_shard_num = shard_num;
-                host_replica_num = replica_num;
+                host_shard_num = shard_num; // 可以看到，这里的host_shard_num就是一个索引值
+                host_replica_num = replica_num; // 这个shard内的replica index
                 address_in_cluster = address;
                 default_database = address.default_database;
             }
@@ -453,8 +456,8 @@ bool DDLTask::tryFindHostInClusterViaResolving(ContextPtr context)
                 else
                 {
                     found_via_resolving = true;
-                    host_shard_num = shard_num;
-                    host_replica_num = replica_num;
+                    host_shard_num = shard_num; // 这个机器所在的shard的索引值
+                    host_replica_num = replica_num; // 这个机器在自己所在的shard的replica索引
                     address_in_cluster = address;
                 }
             }
@@ -464,19 +467,26 @@ bool DDLTask::tryFindHostInClusterViaResolving(ContextPtr context)
     return found_via_resolving;
 }
 
+/**
+ * 获取shard id，注意不是replica id，这个shard id是这个机器所在的shard
+ * DatabaseReplicatedTask重写了该方法
+ * @return
+ */
 String DDLTask::getShardID() const
 {
     /// Generate unique name for shard node, it will be used to execute the query by only single host
     /// Shard node name has format 'replica_name1,replica_name2,...,replica_nameN'
     /// Where replica_name is 'replica_config_host_name:replica_port'
-
+    //  cluster->getShardsAddresses() 会返回所有shards，然后通过at(host_shard_num)得到当前的shard的index
     auto shard_addresses = cluster->getShardsAddresses().at(host_shard_num);
 
+    // 对自己所在的Shard的所有replica进行一个排序
     Strings replica_names;
     for (const Cluster::Address & address : shard_addresses)
         replica_names.emplace_back(address.readableString());
     ::sort(replica_names.begin(), replica_names.end());
 
+    // 将这些replica_names用逗号分隔，拼接起来
     String res;
     for (auto it = replica_names.begin(); it != replica_names.end(); ++it)
         res += *it + (std::next(it) != replica_names.end() ? "," : "");
