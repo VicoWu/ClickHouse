@@ -116,10 +116,14 @@ BlockIO InterpreterAlterQuery::executeToTable(const ASTAlterQuery & alter)
         throw Exception(ErrorCodes::UNKNOWN_DATABASE, "Database {} does not exist", backQuoteIfNeed(alter.getDatabase()));
 
     DatabasePtr database = DatabaseCatalog::instance().getDatabase(table_id.database_name);
+    // 只有 DatabaseReplicated::shouldReplicateQuery()的这个方法才有可能返回true，其它IDatabase实现一律返回false
     if (database->shouldReplicateQuery(getContext(), query_ptr))
     {
         auto guard = DatabaseCatalog::instance().getDDLGuard(table_id.database_name, table_id.table_name);
         guard->releaseTableLock();
+        // DatabaseReplicated::tryEnqueueReplicatedDDL才实现了这个方法
+        // 返回一个BlockIO句柄，我们查看tryEnqueueReplicatedDDL实现可以看到，这个方法返回的时候，本机已经执行完了属于自己的那一部分子任务，其它任务的
+        // 执行结果的跟踪依赖返回的BlockIO
         return database->tryEnqueueReplicatedDDL(query_ptr, getContext());
     }
 

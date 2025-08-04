@@ -232,28 +232,29 @@ ClusterPtr DatabaseReplicated::getClusterImpl(bool all_groups) const
     {
         host_ids.resize(0);
         Coordination::Stat stat;
+        // 通过zookeeper查看注册到这个DatabaseReplicated的zookeeper_path下面的所有replica
         unfiltered_hosts = zookeeper->getChildren(zookeeper_path + "/replicas", &stat);
         if (unfiltered_hosts.empty())
             throw Exception(ErrorCodes::NO_ACTIVE_REPLICAS, "No replicas of database {} found. "
                             "It's possible if the first replica is not fully created yet "
                             "or if the last replica was just dropped or due to logical error", zookeeper_path);
 
-        if (all_groups)
+        if (all_groups) // 如果要查询全租户试图，那么就不进行过滤
         {
             hosts = unfiltered_hosts;
         }
-        else
+        else // 如果要查询单租户试图，那么需要进行过滤
         {
             hosts.clear();
             std::vector<String> paths;
             for (const auto & host : unfiltered_hosts)
                 paths.push_back(zookeeper_path + "/replicas/" + host + "/replica_group");
 
-            auto replica_groups = zookeeper->tryGet(paths);
+            auto replica_groups = zookeeper->tryGet(paths); // 获取每一个host注册到Zookeeper上的的replica_group信息
 
             for (size_t i = 0; i < paths.size(); ++i)
             {
-                if (replica_groups[i].data == replica_group_name)
+                if (replica_groups[i].data == replica_group_name) // 只获取当前自己所在的replica_group的那些host
                     hosts.push_back(unfiltered_hosts[i]);
             }
         }
@@ -294,12 +295,13 @@ ClusterPtr DatabaseReplicated::getClusterImpl(bool all_groups) const
     String current_shard = parseFullReplicaName(hosts.front()).first;
     std::vector<std::vector<DatabaseReplicaInfo>> shards;
     shards.emplace_back();
-    for (size_t i = 0; i < hosts.size(); ++i)
+    // 遍历每一个host，开始构建对应的分片和副本信息
+    for (size_t i = 0; i < hosts.size(); ++i) // 遍历每一个host
     {
         const auto & id = host_ids[i];
         if (id == DROPPED_MARK)
             continue;
-        auto [shard, replica] = parseFullReplicaName(hosts[i]);
+        auto [shard, replica] = parseFullReplicaName(hosts[i]); // 从这个replica的路径中解析shard和replica名字
         auto pos = id.rfind(':');
         String host_port = id.substr(0, pos);
         if (shard != current_shard)
@@ -321,8 +323,9 @@ ClusterPtr DatabaseReplicated::getClusterImpl(bool all_groups) const
     bool treat_local_as_remote = false;
     bool treat_local_port_as_remote = getContext()->getApplicationType() == Context::ApplicationType::LOCAL;
 
+    // 如果是单用户视图，那么Cluster的名字就是DatabaseReplicated的名字
     String cluster_name = TSA_SUPPRESS_WARNING_FOR_READ(database_name);     /// FIXME
-    if (all_groups)
+    if (all_groups) // 如果是多租户视图，那么Cluster的名字是在DatabaseReplicated的名字的前面添加all_groups前缀
         cluster_name = ALL_GROUPS_CLUSTER_PREFIX + cluster_name;
 
     ClusterConnectionParameters params{
@@ -336,6 +339,7 @@ ClusterPtr DatabaseReplicated::getClusterImpl(bool all_groups) const
         cluster_name,
         cluster_auth_info.cluster_secret};
 
+    // 构造对应的Cluster信息
     return std::make_shared<Cluster>(getContext()->getSettingsRef(), shards, params);
 }
 
@@ -983,8 +987,8 @@ void DatabaseReplicated::checkQueryValid(const ASTPtr & query, ContextPtr query_
 }
 
 /**
- * 定义在IDatabase中的virtual方法，只有DatabaseReplicated实现了这个方法
- * 在InterpreterAlterQuery::executeToTable中被调用
+ * 定义在IDatabase中的virtual方法，只有DatabaseReplicated实现了这个方法，因此其他Database不需要该方法
+ * 在 InterpreterAlterQuery::executeToTable 中被调用
  * 这里不仅仅是enqueue，还会完成执行
  */
 BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, ContextPtr query_context, QueryFlags flags)
@@ -1021,10 +1025,13 @@ BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, Contex
     for (const auto & host : unfiltered_hosts)
         paths.push_back(zookeeper_path + "/replicas/" + host + "/replica_group");
 
+    // 批量获取所有replica的 replica_group 值
     auto replica_groups = getZooKeeper()->tryGet(paths);
 
+    // 从所有注册的 replica 中，筛选出与当前节点属于同一 replica_group 的 replica，只等待这些 replica 执行完成。
     for (size_t i = 0; i < paths.size(); ++i)
     {
+        // 只有和自己在同一replica group的replica，才会等待其完成
         if (replica_groups[i].data == replica_group_name)
             hosts_to_wait.push_back(unfiltered_hosts[i]);
     }
@@ -1868,6 +1875,12 @@ void DatabaseReplicated::createTableRestoredFromBackup(
     }
 }
 
+/**
+ * IDatabase的接口方法，默认返回false，只有DatabaseReplicated::shouldReplicateQuery实现了该方法
+ * @param query_context
+ * @param query_ptr
+ * @return
+ */
 bool DatabaseReplicated::shouldReplicateQuery(const ContextPtr & query_context, const ASTPtr & query_ptr) const
 {
     if (query_context->getClientInfo().is_replicated_database_internal)
@@ -1893,7 +1906,7 @@ bool DatabaseReplicated::shouldReplicateQuery(const ContextPtr & query_context, 
     const auto has_many_shards = [&]()
     {
         /// If there is only 1 shard then there is no need to replicate some queries.
-        auto current_cluster = tryGetCluster();
+        auto current_cluster = tryGetCluster(); // 获取这个DatabaseReplicated的Cluster视角，因为DatabaseReplicated也是特殊的Cluster
         return
             !current_cluster || /// Couldn't get the cluster, so we don't know how many shards there are.
             current_cluster->getShardsInfo().size() > 1;
@@ -1902,7 +1915,7 @@ bool DatabaseReplicated::shouldReplicateQuery(const ContextPtr & query_context, 
     /// Some ALTERs are not replicated on database level
     if (const auto * alter = query_ptr->as<const ASTAlterQuery>())
     {
-        // 如果是数据本身的操作，那么需要依赖表本身的Replication能力，不应该让Database层面的Replication来执行，否则会造成多次的数据拷贝
+        // 如果是数据本身的ALTER操作，那么绝对不能进行复制，
         if (alter->isAttachAlter() || alter->isFetchAlter() || alter->isDropPartitionAlter() || is_keeper_map_table(query_ptr) || alter->isFreezeAlter())
             return false;
         // 如果是元数据的操作，只要是多shard，那么就需要依赖Database层面的同步，完成多个shard的DDL操作。
