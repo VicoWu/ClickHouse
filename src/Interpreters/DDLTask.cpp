@@ -519,7 +519,7 @@ void DatabaseReplicatedTask::parseQueryFromEntry(ContextPtr context)
 }
 
 /**
- * 重写了父类的DDLTaskBase::makeQueryContext()方法
+ * 重写了父类的 DDLTaskBase::makeQueryContext() 方法
  * @param from_context
  * @param zookeeper
  * @return
@@ -537,11 +537,11 @@ ContextMutablePtr DatabaseReplicatedTask::makeQueryContext(ContextPtr from_conte
     auto txn = std::make_shared<ZooKeeperMetadataTransaction>(zookeeper, database->zookeeper_path, is_initial_query, entry_path);
     query_context->initZooKeeperMetadataTransaction(txn);
 
-    // 如果是发起方，添加 try/committed/max_log_ptr 写入请求
+    // 如果是发起方，添加 try/committed/max_log_ptr 写入请求，这是DatabaseReplicated需要的
     // 发起方要负责设置 task 的 committed 状态，以及推进 log pointer。
     if (is_initial_query)
     {
-        // 在Entry的路径下面设置/try节点和committed节点，代表这个task的状态
+        // 在Entry的路径下面删除临时节点/try节点和创建committed节点，代表这个task的可执行状态
         txn->addOp(zkutil::makeRemoveRequest(entry_path + "/try", -1));
         txn->addOp(zkutil::makeCreateRequest(entry_path + "/committed", host_id_str, zkutil::CreateMode::Persistent));
         // 将max_log_ptr设置为当前的Entry的id，比如query-00000023，提取出来就是23，设置为max_log_ptr的值
@@ -554,7 +554,8 @@ ContextMutablePtr DatabaseReplicatedTask::makeQueryContext(ContextPtr from_conte
     for (auto & op : ops)
         txn->addOp(std::move(op));
     ops.clear();
-
+    // 这里，是将对应的txn封装到query_context中返回，但是其实并没有执行
+    // 执行 这个txt的是在调用者 DDLWorker::tryExecuteQuery 中
     return query_context;
 }
 
@@ -597,7 +598,7 @@ void DatabaseReplicatedTask::createSyncedNodeIfNeed(const ZooKeeperPtr & zookeep
     if (!value.safeGet<UInt64>())
         return;
     // `/clickhouse/task_queue/query-00000123/synched/host1:port`
-    // 这一步用于通知 initiator（发起者）：该任务的所有副本都执行完了。
+    // 这一步用于通知 initiator（发起者）：该任务在当前机器上已经执行完成了
     zookeeper->createIfNotExists(getSyncedNodePath(), "");
 }
 

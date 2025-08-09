@@ -441,12 +441,12 @@ Chunk DDLQueryStatusSource::generate()
     /// Seems like num_hosts_finished cannot be strictly greater than waiting_hosts.size()
     assert(num_hosts_finished <= waiting_hosts.size());
 
-    if (all_hosts_finished || timeout_exceeded)
+    if (all_hosts_finished || timeout_exceeded) // 如果所有节点完成，或者超时了
         return {};
 
     String node_to_wait = "finished";
     if (is_replicated_database && context->getSettingsRef().database_replicated_enforce_synchronous_settings)
-        node_to_wait = "synced";
+        node_to_wait = "synced"; // 默认情况下， DatabaseReplicated开启了database_replicated_enforce_synchronous_settings
 
     size_t try_number = 0;
 
@@ -455,19 +455,21 @@ Chunk DDLQueryStatusSource::generate()
         if (isCancelled())
             return {};
 
+        // 如果所有节点都已经到达了finished的状态，因此不再等待，或者，等待时间已经超时
         if (stop_waiting_offline_hosts || (timeout_seconds >= 0 && watch.elapsedSeconds() > timeout_seconds))
         {
             timeout_exceeded = true;
-
+            // 还没完成的节点
             size_t num_unfinished_hosts = waiting_hosts.size() - num_hosts_finished;
-            size_t num_active_hosts = current_active_hosts.size();
+            size_t num_active_hosts = current_active_hosts.size(); // 当前的活跃节点
 
             constexpr auto msg_format = "Distributed DDL task {} is not finished on {} of {} hosts "
                                         "({} of them are currently executing the task, {} are inactive). "
                                         "They are going to execute the query in background. Was waiting for {} seconds{}";
-
+            //  如果我们配置了timeout抛出异常，并且stop_waiting_offline_hosts为false(说明的确超时了)
             if (throw_on_timeout || (throw_on_timeout_only_active && !stop_waiting_offline_hosts))
             {
+                // 在这里一定会返回
                 if (!first_exception)
                     first_exception = std::make_unique<Exception>(Exception(ErrorCodes::TIMEOUT_EXCEEDED,
                         msg_format, node_path, num_unfinished_hosts, waiting_hosts.size(), num_active_hosts, offline_hosts.size(),
@@ -475,16 +477,16 @@ Chunk DDLQueryStatusSource::generate()
 
                 /// For Replicated database print a list of unfinished hosts as well. Will return empty block on next iteration.
                 if (is_replicated_database)
-                    return generateChunkWithUnfinishedHosts();
-                return {};
+                    return generateChunkWithUnfinishedHosts(); // 返回另外一个Chunk，记录了还没有完成的节点信息
+                return {}; // 返回空，代表整个DDLQueryStatusSource的生命周期停止
             }
-
+            // 没有超时，或者虽然超时了但是我们disable了throw_on_timeout，
             LOG_INFO(log, msg_format, node_path, num_unfinished_hosts, waiting_hosts.size(), num_active_hosts, offline_hosts.size(),
                      watch.elapsedSeconds(), stop_waiting_offline_hosts ? "" : "which is longer than distributed_ddl_task_timeout");
 
             return generateChunkWithUnfinishedHosts();
         }
-
+        // 没有超时，继续等待，使用指数回退
         sleepForMilliseconds(std::min<size_t>(1000, 50 * try_number));
 
         bool node_exists = false;
@@ -494,58 +496,62 @@ Chunk DDLQueryStatusSource::generate()
         {
             auto retries_ctl = ZooKeeperRetriesControl(
                 "executeDDLQueryOnCluster", getLogger("DDLQueryStatusSource"), getRetriesInfo(), context->getProcessListElement());
-            retries_ctl.retryLoop([&]()
+            retries_ctl.retryLoop([&]() // 一个针对Zookeeper的重试封装，获取已经完成的节点列表，和活跃的节点列表
             {
                 auto zookeeper = context->getZooKeeper();
+                // 准备观察  synced/finished节点以及active节点
                 Strings paths = {String(fs::path(node_path) / node_to_wait), String(fs::path(node_path) / "active")};
                 auto res = zookeeper->tryGetChildren(paths);
+                // res[0] 是 finished/ 或 synced/ 节点的 getChildren 结果
+                // res[1] 是 active/ 节点的 getChildren 结果
                 for (size_t i = 0; i < res.size(); ++i)
                     if (res[i].error != Coordination::Error::ZOK && res[i].error != Coordination::Error::ZNONODE)
-                        throw Coordination::Exception::fromPath(res[i].error, paths[i]);
+                        throw Coordination::Exception::fromPath(res[i].error, paths[i]); // 发生了除了节点不存在以外的其他错误，直接抛出异常，无法处理
 
-                if (res[0].error == Coordination::Error::ZNONODE)
-                    node_exists = zookeeper->exists(node_path);
+                if (res[0].error == Coordination::Error::ZNONODE) // finished/ 任务节点不存在
+                    node_exists = zookeeper->exists(node_path); // node_path是否存在，即  fnished/的上层节点是否存在
                 else
-                    node_exists = true;
-                tmp_hosts = res[0].names;
-                tmp_active_hosts = res[1].names;
+                    node_exists = true; // finished/ 存在
+                tmp_hosts = res[0].names; // 已经完成的节点列表
+                tmp_active_hosts = res[1].names; // 依然活跃节点的列表
 
                 if (only_running_hosts)
-                    offline_hosts = getOfflineHosts(node_path, waiting_hosts, zookeeper, log);
+                    offline_hosts = getOfflineHosts(node_path, waiting_hosts, zookeeper, log); // 获取离线节点
             });
         }
 
-        if (!node_exists)
+        if (!node_exists) // 任务节点不存在
         {
             /// Paradoxically, this exception will be throw even in case of "never_throw" mode.
 
-            if (!first_exception)
+            if (!first_exception) // 第一次异常
                 first_exception = std::make_unique<Exception>(Exception(ErrorCodes::UNFINISHED,
                         "Cannot provide query execution status. The query's node {} has been deleted by the cleaner"
                         " since it was finished (or its lifetime is expired)",
-                        node_path));
+                        node_path)); // 任务节点都不存在，抛出异常
             return {};
         }
-
+        // 输入从zookeeper上获取的完成任务的节点，对比上一次的完成任务的节点，得到新增的、刚刚完成任务的节点
         Strings new_hosts = getNewAndUpdate(tmp_hosts);
         ++try_number;
-
+        // 是否只在乎running节点，即不在乎offline_hosts，那么，直接将offline_hosts算作finished_hosts中
         if (only_running_hosts)
         {
             size_t num_finished_or_offline = 0;
             for (const auto & host : waiting_hosts)
                 num_finished_or_offline += finished_hosts.contains(host) || offline_hosts.contains(host);
-
+            // 算上offline节点，所有的节点都达到了finished的状态
             if (num_finished_or_offline == waiting_hosts.size())
-                stop_waiting_offline_hosts = true;
+                stop_waiting_offline_hosts = true; // 不需要再等待离线节点，下一轮调用generate()的时候，发现stop_waiting_offline_hosts， 就会开始执行退出逻辑
         }
 
-        if (new_hosts.empty())
+        if (new_hosts.empty()) // 没有新的finished节点加入，立刻重新接入下一轮
             continue;
-
-        current_active_hosts = std::move(tmp_active_hosts);
+        // 有新的finished节点被发现，因此，遍历这些新加的节点
+        current_active_hosts = std::move(tmp_active_hosts); // 当前在zookeeper上发现的正在执行任务的节点
 
         MutableColumns columns = output.getHeader().cloneEmptyColumns();
+        // 为每一个新来的、刚刚完成任务的节点生成状态信息
         for (const String & host_id : new_hosts)
         {
             ExecutionStatus status(-1, "Cannot obtain error message");
@@ -554,8 +560,9 @@ Chunk DDLQueryStatusSource::generate()
 #ifdef DEBUG_OR_SANITIZER_BUILD
             bool need_check_status = true;
 #else
-            bool need_check_status = !is_replicated_database;
+            bool need_check_status = !is_replicated_database; // DatabaseReplicated不需要在这里进行状态检查和错误重试，它有自己的重试机制
 #endif
+            // 对于ON CLUSTER DDL， 尝试获取状态信息
             if (need_check_status)
             {
                 String status_data;
@@ -566,19 +573,21 @@ Chunk DDLQueryStatusSource::generate()
                     getLogger("DDLQueryStatusSource"),
                     getRetriesInfo(),
                     context->getProcessListElement());
-                retries_ctl.retryLoop([&]()
+                retries_ctl.retryLoop([&]() // 反复重试，获取状态信息
                 {
+                    // 从ZooKeeper获取执行状态
                     finished_exists = context->getZooKeeper()->tryGet(fs::path(node_path) / "finished" / host_id, status_data);
                 });
                 if (finished_exists)
-                    status.tryDeserializeText(status_data);
+                    status.tryDeserializeText(status_data);//  从状态节点中解析出完成状态等信息
             }
             else
             {
+                // DatabaseReplicated 不需要在这里进行状态检查，因此status code = 0
                 status = ExecutionStatus{0};
             }
 
-
+            // 有异常发生(DatabaseReplicated不应该有非0状态码)，只要不是NEVER_THROW，那么就要抛出异常
             if (status.code != 0 && !first_exception
                 && context->getSettingsRef().distributed_ddl_output_mode != DistributedDDLOutputMode::NEVER_THROW)
             {
@@ -587,10 +596,10 @@ Chunk DDLQueryStatusSource::generate()
 
                 auto [host, port] = parseHostAndPort(host_id);
                 first_exception = std::make_unique<Exception>(Exception(status.code,
-                    "There was an error on [{}:{}]: {}", host, port, status.message));
+                    "There was an error on [{}:{}]: {}", host, port, status.message)); // 构造Exception信息
             }
 
-            ++num_hosts_finished;
+            ++num_hosts_finished; // 已经完成的节点数量+1
 
             size_t num = 0;
             if (is_replicated_database)
@@ -615,7 +624,7 @@ Chunk DDLQueryStatusSource::generate()
         }
 
         return Chunk(std::move(columns), new_hosts.size());
-    }
+    } // end of while loop
 }
 
 IProcessor::Status DDLQueryStatusSource::prepare()
@@ -655,7 +664,7 @@ Strings DDLQueryStatusSource::getNewAndUpdate(const Strings & current_list_of_fi
             continue;
         }
 
-        if (!finished_hosts.contains(host))
+        if (!finished_hosts.contains(host)) // 如果是一个新增的完成任务的节点
         {
             diff.emplace_back(host);
             finished_hosts.emplace(host);

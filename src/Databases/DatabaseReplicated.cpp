@@ -1013,7 +1013,8 @@ BlockIO DatabaseReplicated::tryEnqueueReplicatedDDL(const ASTPtr & query, Contex
     entry.setSettingsIfRequired(query_context);
     entry.tracing_context = OpenTelemetry::CurrentContext();
     entry.is_backup_restore = flags.distributed_backup_restore;
-    // 调用 DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry
+    // 调用 DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry来执行任务。
+    // 这里可以看到，DatabaseReplicated的分布式DDL执行任务的时候，会先自己执行属于自己的task，再发起分布式DDL任务
     // 委托DatabaesReplicatedWorker::tryEnqueueAndExecuteEntry来进行任务的时机执行
     String node_path = ddl_worker->tryEnqueueAndExecuteEntry(entry, query_context);
 

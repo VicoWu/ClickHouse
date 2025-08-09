@@ -321,7 +321,7 @@ String DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry(DDLLogEntry & entr
     entry.tracing_context = OpenTelemetry::CurrentContext();
 
     auto zookeeper = getAndSetZooKeeper();
-    // 获取当前的max_id值
+    // 获取任务执行队列中的max_id值
     UInt32 our_log_ptr = getLogPointer();
     // 当前keeper上记录的max_log_ptr的值
     UInt32 max_log_ptr = parse<UInt32>(zookeeper->get(database->zookeeper_path + "/max_log_ptr"));
@@ -397,6 +397,7 @@ DDLTaskPtr DatabaseReplicatedDDLWorker::initAndCheckTask(const String & entry_na
     UInt32 our_log_ptr = getLogPointer();
     UInt32 entry_num = DatabaseReplicatedTask::getLogEntryNumber(entry_name);
 
+    // 已经执行，不需要再跑了
     if (entry_num <= our_log_ptr)
     {
         out_reason = fmt::format("Task {} already executed according to log pointer {}", entry_name, our_log_ptr);
@@ -410,8 +411,12 @@ DDLTaskPtr DatabaseReplicatedDDLWorker::initAndCheckTask(const String & entry_na
     zkutil::EventPtr wait_committed_or_failed = std::make_shared<Poco::Event>();
 
     String try_node_path = fs::path(entry_path) / "try";
+    // 从 ZooKeeper 中读取 try_node_path 这个节点的数据，如果节点存在，
+    // 就把它的内容填充到 initiator_name 中，并且可以选择注册一个 watch（监听器），当节点被修改或删除时触发。
+    // 如果节点存在并且成功获取数据，则返回true，否则返回false
     if (zookeeper->tryGet(try_node_path, initiator_name, nullptr, wait_committed_or_failed))
     {
+        // task -> host_id_str是当前机器的host:port， initiator_name是记录在try节点中的这个分布式DDL的发起者
         task->is_initial_query = initiator_name == task->host_id_str;
 
         /// Query is not committed yet. We cannot just skip it and execute next one, because reordering may break replication.
@@ -419,8 +424,8 @@ DDLTaskPtr DatabaseReplicatedDDLWorker::initAndCheckTask(const String & entry_na
         constexpr size_t wait_time_ms = 1000;
         size_t max_iterations = database->db_settings.wait_entry_commited_timeout_sec;
         size_t iteration = 0;
-
-        while (!wait_committed_or_failed->tryWait(wait_time_ms))
+        // 每次最多等 wait_time_ms 毫秒，看看事件有没有触发, 如果没触发（tryWait(...) false），就继续循环等下一次
+        while (!wait_committed_or_failed->tryWait(wait_time_ms)) // 在try节点上等待initiator提交
         {
             if (stop_flag)
             {
@@ -429,9 +434,10 @@ DDLTaskPtr DatabaseReplicatedDDLWorker::initAndCheckTask(const String & entry_na
                 /// We can only exit by exception.
                 throw Exception(ErrorCodes::UNFINISHED, "Replication was stopped");
             }
-
+            // 持续没等到 try节点的变化
             if (max_iterations <= ++iteration)
             {
+                // 如果循环次数超过最大等待次数，说明已经超时等待 initiator 提交, 这里尝试删除try节点
                 /// What can we do if initiator hangs for some reason? Seems like we can remove /try node.
                 /// Initiator will fail to commit ZooKeeperMetadataTransaction (including ops for replicated table) if /try does not exist.
                 /// But it's questionable.
@@ -439,23 +445,26 @@ DDLTaskPtr DatabaseReplicatedDDLWorker::initAndCheckTask(const String & entry_na
                 /// We use tryRemove(...) because multiple hosts (including initiator) may try to do it concurrently.
                 auto code = zookeeper->tryRemove(try_node_path);
                 if (code != Coordination::Error::ZOK && code != Coordination::Error::ZNONODE)
-                    throw Coordination::Exception::fromPath(code, try_node_path);
+                    throw Coordination::Exception::fromPath(code, try_node_path); // 删除失败，返回了一个既不是ZOK也不是ZNONODE的状态码
 
+                // 检查 /committed 节点是否存在，发现已经迭代了这么多次，还是没看到committed节点，因此直接退出，timeout
                 if (!zookeeper->exists(fs::path(entry_path) / "committed"))
                 {
+
                     out_reason = fmt::format("Entry {} was forcefully cancelled due to timeout", entry_name);
                     return {};
                 }
             }
         }
     }
-
+    // 执行到这里，说明已经看不到try/节点了，理论上应该看到committed节点了
     if (!zookeeper->exists(fs::path(entry_path) / "committed"))
     {
         out_reason = fmt::format("Entry {} hasn't been committed", entry_name);
         return {};
     }
 
+    // 如果是发起者，无需再执行，因为发起者会在发起任务以前先把自己的task先执行，查看 DatabaseReplicated::tryEnqueueReplicatedDDL
     if (task->is_initial_query)
     {
         assert(!zookeeper->exists(fs::path(entry_path) / "try"));
@@ -506,6 +515,10 @@ void DatabaseReplicatedDDLWorker::initializeLogPointer(const String & processed_
     updateMaxDDLEntryID(processed_entry_name);
 }
 
+/**
+ * 当前已经执行完的最大任务的ID
+ * @return
+ */
 UInt32 DatabaseReplicatedDDLWorker::getLogPointer() const
 {
     // 在 DDLWorker::updateMaxDDLEntryID 方法中会更新max_id的值

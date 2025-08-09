@@ -350,7 +350,7 @@ void DDLWorker::scheduleTasks(bool reinitialized)
             }
         }
     }
-    // 执行到这里，内存中的current_task已经清空了，开始从zookeeper的队列中领取新的节点并生成新的任务
+    // 执行到这里，内存中的current_task只保留了已经至少执行过一次的任务了，开始从zookeeper的队列中领取新的节点并生成新的任务
     // using Strings = std::vector<String>;
     Strings queue_nodes = zookeeper->getChildren(queue_dir, &queue_node_stat, queue_updated_event);
     size_t size_before_filtering = queue_nodes.size();
@@ -380,7 +380,7 @@ void DDLWorker::scheduleTasks(bool reinitialized)
     {   // 如果有一个或者多个失败的任务，那么应该从失败的任务开始执行
         /// If we had failed tasks, then we should start from the first failed task.
         chassert(reinitialized);
-        // 设置重新执行的开始位置
+        // 设置重新执行的开始位置,lower_bound返回第一个大于等于first_failed_task_name的key
         begin_node = std::lower_bound(queue_nodes.begin(), queue_nodes.end(), first_failed_task_name);
     }
     else
@@ -417,19 +417,22 @@ void DDLWorker::scheduleTasks(bool reinitialized)
     // 这时候， queue_nodes.end() == std::find_if()必须返回true，即，std::find_if()必须在所有的节点上返回false，assert才能最终成立
     assert(have_no_tasks_info || queue_nodes.end() == std::find_if(queue_nodes.begin(), queue_nodes.end(), [&](const String & entry_name)
     {
-        // 执行到这个function，意味着这个funciton必须对每个entry返回false，才能让assert成立。
+        // 执行到这个function，意味着这个function必须对每个entry返回false，才能让assert成立。
         // 一旦有一个entry返回了true，意味着
         /// We should return true if some invariants are violated.
         String reason;
         // 将对应的entry转换成task，这里，如果这个Entry中的hosts不包含自己，那么会跳过
         // 当这个entry不需要在当前机器执行，返回nullptr，否则返回对应的task
+        // task不为空，说明应该执行
         auto task = initAndCheckTask(entry_name, reason, zookeeper);
+        //  如果在 current_tasks中找到了当前的entry，那么maybe_currently_processing=true
         bool maybe_currently_processing = current_tasks.end() != std::find_if(current_tasks.begin(), current_tasks.end(), [&](const auto & t)
         {
             return t->entry_name == entry_name; // 这个取出来的entry居然已经在current_tasks中了
         });
         /// begin_node is something like a log pointer
-        // 如果这个entry是在刚刚计算好的起始节点的前面，那么，这个节点肯定是不应该处理的，不然就说明bigin_node 的设置有问题
+        // begin_node是刚刚计算好的起点节点
+        // 如果这个entry是在刚刚计算好的起始节点的前面，那么，这个节点肯定是不应该处理的，不然就说明begin_node 的设置有问题
         if (begin_node == queue_nodes.end() || entry_name < *begin_node)
         {
             /// Return true if entry should be scheduled.
@@ -465,6 +468,7 @@ void DDLWorker::scheduleTasks(bool reinitialized)
         String reason;
         // // 将对应的entry转换成task，这里，如果这个Entry中的hosts不包含自己，那么会跳过
         // 返回null代表这个entry不应该这个节点执行，比如，这个task的host list中不包含自己
+        // 如果task已经被执行，那么也会跳过
         auto task = initAndCheckTask(entry_name, reason, zookeeper);
         if (task) // 成功地将Entry转换成了task，否则返回null
         {
@@ -479,6 +483,7 @@ void DDLWorker::scheduleTasks(bool reinitialized)
             continue;
         }
         // 通过校验，把这个task放到内存中，下面将会处理，通过std::move转移所有权
+        // 这里会清空内存中已经完全处理完成的任务，避免已经finished的任务被重新执行
         auto & saved_task = saveTask(std::move(task));
 
         if (worker_pool)
@@ -508,7 +513,7 @@ DDLTaskBase & DDLWorker::saveTask(DDLTaskPtr && task)
 
     /// Parallel execution is disabled ==> All previous tasks are failed to start or finished,
     /// so current tasks list must be empty when we are ready to process new one.
-    assert(worker_pool || current_tasks.empty());
+    assert(worker_pool || current_tasks.empty()); // 单线程模式下，执行下一个task以前，当前的task肯定已经执行结束了
 
     /// Parallel execution is enabled ==> Not more than pool_size tasks are currently executing.
     /// Note: If current_tasks.size() == pool_size, then all worker threads are busy,
@@ -545,6 +550,7 @@ bool DDLWorker::tryExecuteQuery(DDLTaskBase & task, const ZooKeeperPtr & zookeep
 
     try
     {
+        // DatabaseReplicatedTask::makeQueryContext 重写了该方法
         auto query_context = task.makeQueryContext(context, zookeeper);
 
         chassert(!query_context->getCurrentTransaction());
@@ -566,6 +572,7 @@ bool DDLWorker::tryExecuteQuery(DDLTaskBase & task, const ZooKeeperPtr & zookeep
         {
             /// Most queries commit changes to ZooKeeper right before applying local changes,
             /// but some queries does not support it, so we have to do it here.
+            // 在 queyr执行完成以后，就提交DatabaseReplicatedTask::makeQueryContext中封装的context的txn，比如，try/的删除committed/节点的生成
             if (!txn->isExecuted())
                 txn->commit();
         }
@@ -1321,7 +1328,7 @@ void DDLWorker::runMainThread()
         {
             /**
              * 如果 initialized == false ⇒ 表示刚刚经历过重启或 ZooKeeper 断连重连，因此还处于一个没有完全初始化完成的稳定状态
-             * 此时， reinitialized == true ⇒ 这轮调度是一次重启恢复之后的调度，我们要特别小心处理“未完成的任务”。
+             * 如果 reinitialized == true ⇒ 这轮调度是一次重启恢复之后的调度，我们要特别小心处理“未完成的任务”。
             */
             bool reinitialized = !initialized;
 
@@ -1341,7 +1348,7 @@ void DDLWorker::runMainThread()
             // 因此代码执行到这里，一定是已经重试成功了，即如果初始化不成功，就无法执行scheduleTasks
             // reinitialized的含义是：刚刚是否从一次失败中刚刚恢复过来，如果的确是从一次失败中刚刚恢复过来，那么需要对这些task进行一些特殊处理
             cleanup_event->set();
-            scheduleTasks(reinitialized); // 进行任务的收集和调度，这里的reinitialized的含义是： 是否刚刚完成了一次新的initialize操作
+            scheduleTasks(reinitialized); // 进行任务的收集和调度，这里的reinitialized的含义是： 是否刚刚完成了一次全新的initialize操作
             subsequent_errors_count = 0;
 
             LOG_DEBUG(log, "Waiting for queue updates");
