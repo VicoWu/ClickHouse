@@ -80,6 +80,10 @@ void SerializationInfo::add(const SerializationInfo & other)
         kind = chooseKind(data, settings);
 }
 
+/**
+ * 增加使用默认值的行数，这个行数的占比会影响到是否因为默认值的行数占比很多而选择使用稀疏压缩的方式进行序列化
+ * @param length
+ */
 void SerializationInfo::addDefaults(size_t length)
 {
     data.addDefaults(length);

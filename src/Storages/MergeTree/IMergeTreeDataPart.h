@@ -150,6 +150,7 @@ public:
 
     const NamesAndTypesList & getColumns() const { return columns; }
     const ColumnsDescription & getColumnsDescription() const { return columns_description; }
+    // 在 IMergeTreeDataPart::setColumns 中设置
     const ColumnsDescription & getColumnsDescriptionWithCollectedNested() const { return columns_description_with_collected_nested; }
 
     NameAndTypePair getColumn(const String & name) const;

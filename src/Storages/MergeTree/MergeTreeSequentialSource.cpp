@@ -298,8 +298,8 @@ Pipe createMergeTreeSequentialSource(
     MergeTreeSequentialSourceType type,
     const MergeTreeData & storage,
     const StorageSnapshotPtr & storage_snapshot,
-    MergeTreeData::DataPartPtr data_part,
-    Names columns_to_read,
+    MergeTreeData::DataPartPtr data_part, // 需要读取的part
+    Names columns_to_read, // 需要读取的列，可以看到，在Vertical Merge中，这个列是merging_columns，而不是gathering_columns
     std::optional<MarkRanges> mark_ranges,
     std::shared_ptr<std::atomic<size_t>> filtered_rows_count,
     bool apply_deleted_mask,

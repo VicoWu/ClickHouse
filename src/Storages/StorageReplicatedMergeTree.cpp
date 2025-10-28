@@ -5652,6 +5652,7 @@ SinkToStoragePtr StorageReplicatedMergeTree::write(const ASTPtr & /*query*/, con
 
     const auto storage_settings_ptr = getSettings();
     const Settings & query_settings = local_context->getSettingsRef();
+    // insert_deduplicate 代表 insert的时候是否进行block的去重，默认是true，即进行去重
     bool deduplicate = storage_settings_ptr->replicated_deduplication_window != 0 && query_settings.insert_deduplicate;
     bool async_deduplicate = async_insert && query_settings.async_insert_deduplicate && storage_settings_ptr->replicated_deduplication_window_for_async_inserts != 0 && query_settings.insert_deduplicate;
     if (async_deduplicate)

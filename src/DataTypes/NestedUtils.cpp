@@ -45,6 +45,19 @@ std::string concatenateName(const std::string & nested_table_name, const std::st
 
 
 /** Name can be treated as compound if it contains dot (.) in the middle.
+ *
+功能: 把带点号的“复合名”拆成两段。若没有可用的点，返回原名和空后缀。
+规则:
+选择分隔点:
+reverse=false: 用第一个点的位置（find_first_of('.'))
+reverse=true: 用最后一个点的位置（find_last_of('.'))
+边界检查: 没点/点在开头/点在末尾，都返回 {name, ""}。
+否则返回 {name[0:idx), name[idx+1:]}。
+示例:
+splitName("n.a", false) → {"n", "a"}
+splitName("n.a.b", false) → {"n", "a.b"}
+splitName("n.a.b", true) → {"n.a", "b"}
+splitName(".a") 或 splitName("a.") 或 splitName("a", any) → {"原串", ""}
   */
 std::pair<std::string, std::string> splitName(const std::string & name, bool reverse)
 {
@@ -161,8 +174,14 @@ namespace
 
 using NameToDataType = std::map<String, DataTypePtr>;
 
+/**
+ * 传入普通的NamesAndTypesList，筛选出对应的Nested列，并以 unordered_map<String, NamesAndTypesList>返回
+ * @param names_and_types
+ * @return unordered_map<String, NamesAndTypesList>，这个key是对应的Nested的基列的名字，value是多个子列的类型信息
+ */
 NameToDataType getSubcolumnsOfNested(const NamesAndTypesList & names_and_types)
 {
+    // nested是一个map，map的key是父列的基名，NamesAndTypesList是对应的子列的列表
     std::unordered_map<String, NamesAndTypesList> nested;
     for (const auto & name_type : names_and_types)
     {
@@ -171,14 +190,15 @@ NameToDataType getSubcolumnsOfNested(const NamesAndTypesList & names_and_types)
         /// Ignore true Nested type, but try to unite flatten arrays to Nested type.
         if (!isNested(name_type.type) && type_arr)
         {
+            // 对复合子列进行拆分，比如, n.a 拆分成("n", "a")，
+            // 这样，split.first = "n"(基列名称), split.second = "a"(子列名称)
             auto split = splitName(name_type.name);
-            if (!split.second.empty())
+            if (!split.second.empty()) // 如果有子列， 则保存到 unordered_map<String, NamesAndTypesList> nested  中去
                 nested[split.first].emplace_back(split.second, type_arr->getNestedType());
         }
     }
-
-    std::map<String, DataTypePtr> nested_types;
-
+    // 构造nested，key是基列的名称，value是createNested(...)的返回值，
+    // 即类似一个DataTypeNestedCustomName的封装，描述了每一个Array列的列名和类型
     for (const auto & [name, elems] : nested)
         nested_types.emplace(name, createNested(elems.getTypes(), elems.getNames()));
 
@@ -190,38 +210,69 @@ NameToDataType getSubcolumnsOfNested(const NamesAndTypesList & names_and_types)
 NamesAndTypesList collect(const NamesAndTypesList & names_and_types)
 {
     NamesAndTypesList res;
+    // 按基名聚合出每个 Nested 父列的 DataTypeNested(子字段列表) 映射：n -> Nested(a T, b U)。
     auto nested_types = getSubcolumnsOfNested(names_and_types);
-
+    // 对每个 name_type
     for (const auto & name_type : names_and_types)
     {
         auto split = splitName(name_type.name);
+        // 如果不是 Array，或没有子名，或基名不在 nested_types，则保留该列到 res。
+        // 否则（这是 Nested 的子列，如 n.a Array(T)），跳过，不放进 res。
         if (!isArray(name_type.type) || split.second.empty() || !nested_types.contains(split.first))
-            res.push_back(name_type);
+            res.push_back(name_type);  // 普通列，直接放到res中
     }
+
+    /**
+     * 把 nested_types 里收集到的每个父列（n, DataTypeNested(...)) 追加进 res
+     * name_type.first:  Nested 父列的基名（例如 "n"）
+     * name_type.second: 对应的 DataTypeNested 类型（包含该 Nested 的子字段定义，如 a T, b U）。
+     */
 
     for (const auto & name_type : nested_types)
         res.emplace_back(name_type.first, name_type.second);
 
+    /**
+     * 非 Nested 的列保持原样
+     * 属于 Nested 的子列不再单独出现，转而以一个父列 n: Nested(a T, b U) 出现在列表中。
+     * 常用于 Wide part 的“逻辑视图”重建（配合 GetColumnsOptions::All），便于识别 Nested 父列、共享 offsets 等。
+     */
     return res;
 }
 
+/**
+ * class NamesAndTypesList : public std::list<NameAndTypePair>
+ * 对 Nested 来说，它的子字段是以 Array(T) 形式出现（Nested 物理上拆成多列的 Array），convertToSubcolumns方法 利用这一点把像 "n.a: Array(T)"，"n.b: Array(T)"
+ * 规范化为“子列表示”（基名 n + 子列 a），以便共享 offsets、精确到子列读取。
+ * 它不会把任意复合类型“转成 Array”；只在检测到 type 是 Array 且名字形如 base.child（Nested 场景）时做规范化。
+ * @param names_and_types std::list<NameAndTypePair>，这里的列是没有拆解的列，即加入是复合列，那么这里还没有拆解
+ * @return
+ */
 NamesAndTypesList convertToSubcolumns(const NamesAndTypesList & names_and_types)
 {
+    // using NameToDataType = std::map<String, DataTypePtr>;
+    // 在names_and_types中 收集每个 Nested 基名对应的 Nested 类型，形成一个map，如 n -> DataTypeNested(n).
     auto nested_types = getSubcolumnsOfNested(names_and_types);
     auto res = names_and_types;
 
-    for (auto & name_type : res)
+    for (auto & name_type : res) // 对于参数中的列(基列，是对Nested已经拆解成多个Array以后的列)
     {
+        // 若该项类型不是 Array，跳过（Nested 的每个字段物理上是 Array(...)）。
         if (!isArray(name_type.type))
             continue;
-
+        // 把名字拆成 (基名, 子列名)，如 "n.a" -> ("n","a")
         auto split = splitName(name_type.name);
+        // 已是子列表示(isSubcolumn())或没有子列名(split.second 为空)，跳过
         if (name_type.isSubcolumn() || split.second.empty())
             continue;
-
+        // 查找基列名称，找到对应的子列
         auto it = nested_types.find(split.first);
-        if (it != nested_types.end())
-            name_type = NameAndTypePair{split.first, split.second, it->second, it->second->getSubcolumnType(split.second)};
+        if (it != nested_types.end()) // 找到了这个基名信息
+            // 把当前的NameAndTypePair替换成一个新的NameAndTypePair，包含了这个子列的等价规范的信息
+            name_type = NameAndTypePair{split.first,  // 基名 n
+                                        split.second,  // 子列名 b
+                                        it->second,   // 这个基列对应的 DataTypeNested，DataTypeNested中是包含了这个基列的所有子列信息
+                                        it->second->getSubcolumnType(split.second)  // 这个基名对应的子列名的类型
+            };
     }
 
     return res;

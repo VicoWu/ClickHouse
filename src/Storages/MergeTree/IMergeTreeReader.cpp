@@ -26,7 +26,7 @@ namespace ErrorCodes
 
 IMergeTreeReader::IMergeTreeReader(
     MergeTreeDataPartInfoForReaderPtr data_part_info_for_read_,
-    const NamesAndTypesList & columns_,
+    const NamesAndTypesList & columns_, // 这次merge需要读取的Column，显然，对于Vertical Merge的VerticalMergeStage阶段，这个columns就是gathering_columns 中的某一个Column
     const VirtualFields & virtual_fields_,
     const StorageSnapshotPtr & storage_snapshot_,
     UncompressedCache * uncompressed_cache_,
@@ -44,12 +44,12 @@ IMergeTreeReader::IMergeTreeReader(
     , alter_conversions(data_part_info_for_read->getAlterConversions())
     /// For wide parts convert plain arrays of Nested to subcolumns
     /// to allow to use shared offset column from cache.
-    , original_requested_columns(columns_)
-    , requested_columns(data_part_info_for_read->isWidePart()
-        ? Nested::convertToSubcolumns(columns_)
+    , original_requested_columns(columns_) // 原始的请求的Column，一个 NamesAndTypesList
+    , requested_columns(data_part_info_for_read->isWidePart() // 如果是Wide Part，那么如果是复合列，还需要对复合列进行拆分，拆分以后放到requested_columns中
+        ? Nested::convertToSubcolumns(columns_) // 对columns_中的列进行规范化处理，返回 NamesAndTypesList
         : columns_)
-    , part_columns(data_part_info_for_read->isWidePart()
-        ? data_part_info_for_read->getColumnsDescriptionWithCollectedNested()
+    , part_columns(data_part_info_for_read->isWidePart() // 设置这个part的column信息，如果是wide part，那么就收集包含Nested Column的
+        ? data_part_info_for_read->getColumnsDescriptionWithCollectedNested() // 对这个Part中的所有列进行规范化处理，返回ColumnDescription，ColumnDescription其实就是封装了规范化以后的NamesAndTypesList
         : data_part_info_for_read->getColumnsDescription())
     , virtual_fields(virtual_fields_)
 {
@@ -224,6 +224,7 @@ String IMergeTreeReader::getColumnNameInPart(const NameAndTypePair & required_co
     auto name_in_storage = required_column.getNameInStorage();
     auto subcolumn_name = required_column.getSubcolumnName();
 
+    // 恢复到alter以前的column名字
     if (alter_conversions->isColumnRenamed(name_in_storage))
         name_in_storage = alter_conversions->getColumnOldName(name_in_storage);
 

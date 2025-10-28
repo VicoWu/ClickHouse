@@ -1049,6 +1049,7 @@ bool ZooKeeper::waitForDisappear(const std::string & path, const WaitCondition &
     return false;
 }
 
+
 void ZooKeeper::deleteEphemeralNodeIfContentMatches(const std::string & path, const std::string & fast_delete_if_equal_value)
 {
     zkutil::EventPtr eph_node_disappeared = std::make_shared<Poco::Event>();

@@ -30,8 +30,8 @@ namespace ErrorCodes
 template <class Queue>
 MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     String name_,
-    size_t threads_count_,
-    size_t max_tasks_count_,
+    size_t threads_count_, /// 32
+    size_t max_tasks_count_, /// 64
     CurrentMetrics::Metric metric_,
     CurrentMetrics::Metric max_tasks_metric_,
     std::string_view policy)
@@ -39,7 +39,7 @@ MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     , threads_count(threads_count_)
     , max_tasks_count(max_tasks_count_)
     , metric(metric_)
-    , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // active + pending
+    , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // active + pending  max_tasks_metric负责将 max_tasks_metric_的值写入成为2 * max_tasks_count
     , pool(std::make_unique<ThreadPool>(
           CurrentMetrics::MergeTreeBackgroundExecutorThreads, CurrentMetrics::MergeTreeBackgroundExecutorThreadsActive, CurrentMetrics::MergeTreeBackgroundExecutorThreadsScheduled))
 {

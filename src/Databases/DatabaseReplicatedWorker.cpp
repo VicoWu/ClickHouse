@@ -53,7 +53,7 @@ bool DatabaseReplicatedDDLWorker::initializeMainThread()
                 /// NOTE It will not stop cleanup thread until DDLWorker::shutdown() call (cleanup thread will just do nothing)
                 break;
             }
-
+            // 连续N次失败，超过了失败次数上限
             if (database->db_settings.max_retries_before_automatic_recovery &&
                 database->db_settings.max_retries_before_automatic_recovery <= subsequent_errors_count)
             {
@@ -70,9 +70,9 @@ bool DatabaseReplicatedDDLWorker::initializeMainThread()
                 String digest_str;
                 zookeeper->tryGet(database->replica_path + "/digest", digest_str);
                 LOG_WARNING(log, "Resetting digest from {} to {}", digest_str, FORCE_AUTO_RECOVERY_DIGEST);
-                zookeeper->trySet(database->replica_path + "/digest", FORCE_AUTO_RECOVERY_DIGEST);
+                zookeeper->trySet(database->replica_path + "/digest", FORCE_AUTO_RECOVERY_DIGEST); // 将这个replica的digest强制置为42
             }
-
+            // 认为自己“丢失”，走 recoverLostReplica()
             initializeReplication();
             initialized = true;
             {
@@ -370,7 +370,7 @@ String DatabaseReplicatedDDLWorker::tryEnqueueAndExecuteEntry(DDLLogEntry & entr
             task->execution_status.code,
             task->execution_status.message);
     }
-
+    // 节点成功删除，这样在EphemeralNodeHolder析构的时候就不用再删除/try了
     try_node->setAlreadyRemoved();
 
     return entry_path;
@@ -485,8 +485,9 @@ DDLTaskPtr DatabaseReplicatedDDLWorker::initAndCheckTask(const String & entry_na
     if (task->entry.query.empty())
     {
         /// Some replica is added or removed, let's update cached cluster
+        // 再次从Keeper上读取和自己在同一Group的Replicas，设置这个Database的 cluster
         database->setCluster(database->getClusterImpl());
-        if (!database->replica_group_name.empty())
+        if (!database->replica_group_name.empty()) // 如果已经显式设置了replica_group_name，那么同时设置这个DatabaseReplicated的cluster_all_groups
             database->setCluster(database->getClusterImpl(/*all_groups*/ true), /*all_groups*/ true);
         out_reason = fmt::format("Entry {} is a dummy task", entry_name);
         return {};

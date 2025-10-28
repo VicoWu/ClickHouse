@@ -95,7 +95,7 @@ BlockIO executeDDLQueryOnCluster(const ASTPtr & query_ptr_, ContextPtr context, 
     }
 
     ClusterPtr cluster = params.cluster;
-    if (!cluster)
+    if (!cluster) // 如果cluster 是空的
     {
         query->cluster = context->getMacros()->expand(query->cluster);
         cluster = context->getCluster(query->cluster);

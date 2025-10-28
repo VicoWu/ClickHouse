@@ -3945,6 +3945,7 @@ std::shared_ptr<Cluster> Context::tryGetCluster(const std::string & cluster_name
 
     {
         std::lock_guard lock(shared->clusters_mutex);
+
         res = getClustersImpl(lock)->getCluster(cluster_name);
 
         if (res == nullptr && shared->cluster_discovery)

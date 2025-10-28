@@ -82,6 +82,14 @@ static ColumnsStatistics getStatisticsForColumns(
     return all_statistics;
 }
 
+/**
+ * 给缺失的列补充相关元数据信息，这样，在merge以后，这些part中缺失()的列
+ * @param num_rows_in_parts
+ * @param part_columns
+ * @param storage_columns
+ * @param info_settings
+ * @param new_infos
+ */
 static void addMissedColumnsToSerializationInfos(
     size_t num_rows_in_parts,
     const Names & part_columns,
@@ -91,19 +99,21 @@ static void addMissedColumnsToSerializationInfos(
 {
     NameSet part_columns_set(part_columns.begin(), part_columns.end());
 
+    // 遍历这张表的所有列
     for (const auto & column : storage_columns)
     {
+        // 这一列在part中已经存在，忽略
         if (part_columns_set.contains(column.name))
             continue;
-
+        // 这一列在part中不存在，并且默认类型为Default
         if (column.default_desc.kind != ColumnDefaultKind::Default)
             continue;
-
+        // 这一列的默认类型为Default，但是Default值是通过表达式来表达的，即，不是简单当作“类型零值/空值”的默认。
         if (column.default_desc.expression)
             continue;
-
+        // 返回column.type中的SerializationInfo指针，存放对应信息
         auto new_info = column.type->createSerializationInfo(info_settings);
-        new_info->addDefaults(num_rows_in_parts);
+        new_info->addDefaults(num_rows_in_parts); // part中这一列缺失，并且使用默认值，因此整个part的行数就是缺失列的默认值的行数
         new_infos.emplace(column.name, std::move(new_info));
     }
 }
@@ -113,9 +123,10 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::extractMergingAndGatheringColu
 {
     const auto & sorting_key_expr = global_ctx->metadata_snapshot->getSortingKey().expression;
     Names sort_key_columns_vec = sorting_key_expr->getRequiredColumns();
-
+    // 收集排序列，显然，排序列是不可以进行Vertical Merge的，必须在Horizontal Merge阶段进行计算
     std::set<String> key_columns(sort_key_columns_vec.cbegin(), sort_key_columns_vec.cend());
 
+    // 对一些特殊case的特殊处理
     /// Force sign column for Collapsing mode
     if (ctx->merging_params.mode == MergeTreeData::MergingParams::Collapsing)
         key_columns.emplace(ctx->merging_params.sign_column);
@@ -132,24 +143,33 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::extractMergingAndGatheringColu
         key_columns.emplace(ctx->merging_params.sign_column);
 
     /// Force to merge at least one column in case of empty key
-    if (key_columns.empty())
+    if (key_columns.empty()) // 如果根本没有Sorting Column，那么就随机选择第一个column进行merge
         key_columns.emplace(global_ctx->storage_columns.front().name);
 
+    // 获取二级索引，看看二级索引所依赖的列
     const auto & skip_indexes = global_ctx->metadata_snapshot->getSecondaryIndices();
 
     for (const auto & index : skip_indexes)
     {
+        /**
+         *  查看这个二级索引所依赖的列：
+         *      如果这个二级索引只依赖一列，那么就把这个索引列登记到 skip_indexes_by_column
+         *      如果这个二级索引依赖多列，那么就把这个索引登记到 merging_skip_indexes
+         */
         auto index_columns = index.expression->getRequiredColumns();
 
         /// Calculate indexes that depend only on one column on vertical
         /// stage and other indexes on horizonatal stage of merge.
         if (index_columns.size() == 1)
         {
+            // 取出这个索引所依赖的列
             const auto & column_name = index_columns.front();
+            // skip_indexes_by_column， 这里是构建column -> index column的映射关系，这样，对该索引的处理会延迟到后面对这个column进行vertical 处理的时候再计算
             global_ctx->skip_indexes_by_column[column_name].push_back(index);
         }
         else
         {
+            // 这个索引所依赖的是多列，这样，必须在horizontal阶段就对这个索引进行重新计算
             std::ranges::copy(index_columns, std::inserter(key_columns, key_columns.end()));
             global_ctx->merging_skip_indexes.push_back(index);
         }
@@ -159,22 +179,27 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::extractMergingAndGatheringColu
 
     for (const auto & column : global_ctx->storage_columns)
     {
+        // 如果这个列是Sorting Column
         if (key_columns.contains(column.name))
         {
+            // 加入到merging_columns中去
             global_ctx->merging_columns.emplace_back(column);
 
             /// If column is in horizontal stage we need to calculate its indexes on horizontal stage as well
             auto it = global_ctx->skip_indexes_by_column.find(column.name);
+            // 如果这个column同时也是被某一个二级索引所独立依赖(即这个二级索引独立依赖这个column)
             if (it != global_ctx->skip_indexes_by_column.end())
             {
-                for (auto & index : it->second)
+                // 遍历 独立依赖这个column的所有的 index（即可能我们为这个column创建了多个index，每个index都独立依赖这个column）， 把这个index都加入到merging_skip_indexes中，这样，这个index就不会延迟到vertical merge阶段处理了
+                for (auto & index : it->second) //
                     global_ctx->merging_skip_indexes.push_back(std::move(index));
-
+                // 把这个column从skip_indexes_by_column这个map中删除，这样，所有独立依赖这个column的index都不会被延迟到vertical处理了，因为这个column是一个merging_column，不会被延迟处理
                 global_ctx->skip_indexes_by_column.erase(it);
             }
         }
         else
         {
+            // gathering_columns，会在vertical merge阶段处理
             global_ctx->gathering_columns.emplace_back(column);
         }
     }
@@ -193,11 +218,13 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
     }
     const String local_tmp_suffix = global_ctx->parent_part ? ctx->suffix : "";
 
+    // 若全局合并被停用（merges_blocker）或本次合并被标记取消（merge_list_element_ptr->is_cancelled），直接中止本次合并
     if (global_ctx->merges_blocker->isCancelled() || global_ctx->merge_list_element_ptr->is_cancelled.load(std::memory_order_relaxed))
         throw Exception(ErrorCodes::ABORTED, "Cancelled merging parts");
 
     /// We don't want to perform merge assigned with TTL as normal merge, so
     /// throw exception
+    // 如果这次任务被标记为 TTL 合并”（isTTLMergeType(future_part->merge_type) 为真）且 TTL 合并被停用（ttl_merges_blocker），直接中止本次合并
     if (isTTLMergeType(global_ctx->future_part->merge_type) && global_ctx->ttl_merges_blocker->isCancelled())
         throw Exception(ErrorCodes::ABORTED, "Cancelled merging parts with TTL");
 
@@ -248,14 +275,15 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
     if (!global_ctx->parent_part)
         global_ctx->temporary_directory_lock = global_ctx->data->getTemporaryPartDirectoryHolder(local_tmp_part_basename);
 
+    // 获取所有的物理存储列，显然，在Horizontal Merge的场景下，这些物理列将作为全部的Merging Columns
     global_ctx->storage_columns = global_ctx->metadata_snapshot->getColumns().getAllPhysical();
 
     auto object_columns = MergeTreeData::getConcreteObjectColumns(global_ctx->future_part->parts, global_ctx->metadata_snapshot->getColumns());
     extendObjectColumns(global_ctx->storage_columns, object_columns, false);
     global_ctx->storage_snapshot = std::make_shared<StorageSnapshot>(*global_ctx->data, global_ctx->metadata_snapshot, std::move(object_columns));
-
+    // 收集merging_columns 和 gathering_columns
     extractMergingAndGatheringColumns();
-
+    // 设置新part的一些原信息
     global_ctx->new_data_part->uuid = global_ctx->future_part->uuid;
     global_ctx->new_data_part->partition.assign(global_ctx->future_part->getPartition());
     global_ctx->new_data_part->is_temp = global_ctx->parent_part == nullptr;
@@ -264,10 +292,10 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
     /// Here Clickhouse claims that this new part can be deleted in temporary state without unlocking the blobs
     /// The blobs have to be removed along with the part, this temporary part owns them and does not share them yet.
     global_ctx->new_data_part->remove_tmp_policy = IMergeTreeDataPart::BlobsRemovalPolicyForTemporaryParts::REMOVE_BLOBS;
-
-    ctx->need_remove_expired_values = false;
-    ctx->force_ttl = false;
-
+    // 默认情况下，不处理过期值，不强制计算TTL
+    ctx->need_remove_expired_values = false; // 是否删除过期值
+    ctx->force_ttl = false; // 是否强制计算TTL
+    // 可选内部BlockNum列和BlockOffset列到gathering column
     if (enabledBlockNumberColumn(global_ctx))
         addGatheringColumn(global_ctx, BlockNumberColumn::name, BlockNumberColumn::type);
 
@@ -276,6 +304,7 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
 
     SerializationInfo::Settings info_settings =
     {
+            // 确认什么比例下被认为是稀疏
         .ratio_of_defaults_for_sparse = global_ctx->data->getSettings()->ratio_of_defaults_for_sparse_serialization,
         .choose_kind = true,
     };
@@ -287,11 +316,12 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
         global_ctx->new_data_part->ttl_infos.update(part->ttl_infos);
         if (global_ctx->metadata_snapshot->hasAnyTTL() && !part->checkAllTTLCalculated(global_ctx->metadata_snapshot))
         {
+            // 如果表设置了TTL， 并且有任何的TTL还没有被计算，那么本次合并会强制计算TTL
             LOG_INFO(ctx->log, "Some TTL values were not calculated for part {}. Will calculate them forcefully during merge.", part->name);
-            ctx->need_remove_expired_values = true;
-            ctx->force_ttl = true;
+            ctx->need_remove_expired_values = true; // 强制删除过期TTL
+            ctx->force_ttl = true; // 强制计算TTL
         }
-
+        // 如果 isAlwaysDefault 返回false，那么意味着需要根据默认值占比来自动选择稀疏序列化方式
         if (!info_settings.isAlwaysDefault())
         {
             auto part_infos = part->getSerializationInfos();
@@ -308,11 +338,14 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
     }
 
     const auto & local_part_min_ttl = global_ctx->new_data_part->ttl_infos.part_min_ttl;
+    // 最小 TTL 指的是 新合并 part 上按 TTL 规则计算出的“过期时间戳”的最小值（earliest expiration time），这个值是聚合自参与合并的各源 part 的 TTL 信息
+    // 如果 part_min_ttl 存在且 ≤ 当前合并时间，说明该 part 内至少有部分数据/列已经到过期点，于是 need_remove_expired_values=true，合并时要执行 TTL 清理。
     if (local_part_min_ttl && local_part_min_ttl <= global_ctx->time_of_merge)
-        ctx->need_remove_expired_values = true;
+        ctx->need_remove_expired_values = true; // 需要根据TTL删除过期值
 
     global_ctx->new_data_part->setColumns(global_ctx->storage_columns, infos, global_ctx->metadata_snapshot->getMetadataVersion());
 
+    // 对于这个普通的Merge，如果已经决定需要删除过期行，但是，目前ttl_merges_blocker又是设置了状态，那么这次还是不能删除过期值，但是merge照常进行
     if (ctx->need_remove_expired_values && global_ctx->ttl_merges_blocker->isCancelled())
     {
         LOG_INFO(ctx->log, "Part {} has values with expired TTL, but merges with TTL are cancelled.", global_ctx->new_data_part->name);
@@ -321,7 +354,7 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
 
     ctx->sum_input_rows_upper_bound = global_ctx->merge_list_element_ptr->total_rows_count;
     ctx->sum_compressed_bytes_upper_bound = global_ctx->merge_list_element_ptr->total_size_bytes_compressed;
-
+    // 选择merge算法， vertical OR horizontal
     global_ctx->chosen_merge_algorithm = chooseMergeAlgorithm();
     global_ctx->merge_list_element_ptr->merge_algorithm.store(global_ctx->chosen_merge_algorithm, std::memory_order_relaxed);
 
@@ -341,18 +374,22 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
     {
         case MergeAlgorithm::Horizontal:
         {
+            //  在Horizontal模式下，merging_columns直接被设置为全部的physical columns
+            //  但是在Vertical模式下，merging_columns只是那些sorting columns，而gathering_columns则是进行真正的vertical merge的列
             global_ctx->merging_columns = global_ctx->storage_columns;
             global_ctx->merging_skip_indexes = global_ctx->metadata_snapshot->getSecondaryIndices();
-            global_ctx->gathering_columns.clear();
+            global_ctx->gathering_columns.clear(); //  Horizontal Merge下面没有gathering_columns
             global_ctx->skip_indexes_by_column.clear();
             break;
         }
         case MergeAlgorithm::Vertical:
         {
             ctx->rows_sources_uncompressed_write_buf = ctx->tmp_disk->createRawStream();
+            // 打开rows_source写缓冲
             ctx->rows_sources_write_buf = std::make_unique<CompressedWriteBuffer>(*ctx->rows_sources_uncompressed_write_buf);
 
             std::map<String, UInt64> local_merged_column_to_size;
+            // 收集各个源part的列大小，存放到各个part的信息中
             for (const auto & part : global_ctx->future_part->parts)
                 part->accumulateColumnSizes(local_merged_column_to_size);
 
@@ -370,6 +407,8 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
     /// If merge is vertical we cannot calculate it
     ctx->blocks_are_granules_size = (global_ctx->chosen_merge_algorithm == MergeAlgorithm::Vertical);
 
+    // 基于merging_columns创建Merge的合并读取流。显然，在Horizontal Merge下，merging_columns就是全部的Physical Columns
+    // 但是在Vertical Merge下，merging_columns 仅仅是sorting columns
     /// Merged stream will be created and available as merged_stream variable
     createMergedStream();
 
@@ -381,28 +420,37 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
     /// Also note, that it is better to do this here, since in other places it
     /// will be too late (i.e. they will be written, and we will burn CPU/disk
     /// resources for this).
+    /**
+     * 当 need_remove_expired_values 为 false 时，本次合并不会插入 TTLTransform；
+     * 但如果某些列已经命中过“列级 TTL（TTLColumnAlgorithm）”，源 part 里这些列应被“物理移除”。
+     * 若此时继续按常规合并流程写新 part，那些已过期列可能被“默认值补齐”而又被写回来，浪费 IO 且与 TTL 语义相悖
+     * ,所以，这段代码的作用是，如果当前的Merge已经决定不走 TTLTransform(need_remove_expired_values = false) ，那么
+     * 手动把“已完全过期的列”从将要写出的新 part 中剔除，避免它们被默认值重新写回。
+     */
     if (!ctx->need_remove_expired_values)
     {
         auto part_serialization_infos = global_ctx->new_data_part->getSerializationInfos();
 
         NameSet columns_to_remove;
+        // 遍历新part的columns_ttl
         for (auto & [column_name, ttl] : global_ctx->new_data_part->ttl_infos.columns_ttl)
         {
-            if (ttl.finished())
+            if (ttl.finished()) // 列已经到期
             {
                 global_ctx->new_data_part->expired_columns.insert(column_name);
                 LOG_TRACE(ctx->log, "Adding expired column {} for part {}", column_name, global_ctx->new_data_part->name);
-                columns_to_remove.insert(column_name);
-                part_serialization_infos.erase(column_name);
+                columns_to_remove.insert(column_name); // 记录这个需要删除的列
+                part_serialization_infos.erase(column_name); // 把这个列从part_serialization_infos中移除，避免这个已经需要删除的列被序列化
             }
         }
-
+        // 如果的确存在需要删除的列
         if (!columns_to_remove.empty())
         {
+            // 那么这些列需要从merging_columns, gathering_columns和storage_columns中删除
             global_ctx->gathering_columns = global_ctx->gathering_columns.eraseNames(columns_to_remove);
             global_ctx->merging_columns = global_ctx->merging_columns.eraseNames(columns_to_remove);
             global_ctx->storage_columns = global_ctx->storage_columns.eraseNames(columns_to_remove);
-
+            // 重新设置列信息，因为已经删除了过期列
             global_ctx->new_data_part->setColumns(
                 global_ctx->storage_columns,
                 part_serialization_infos,
@@ -424,15 +472,20 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare()
 
     global_ctx->rows_written = 0;
     ctx->initial_reservation = global_ctx->space_reservation ? global_ctx->space_reservation->getSize() : 0;
-
+    /**
+     * 生成一个“取消检查”函数，放在 ctx->is_cancelled中，用于执行过程中随时判断是否要中断合并。返回 true 的三种情况：
+     *   merges_blocker->isCancelled(): 全局停止合并（如 SYSTEM STOP MERGES）。
+     *   need_remove 为真且 ttl_merges_blocker->isCancelled(): 本次需要做 TTL 清理，但当前禁止 TTL 合并，则取消。
+     *   merge_list_element->is_cancelled.load(...): 该合并任务被单独标记取消。
+     */
     ctx->is_cancelled = [merges_blocker = global_ctx->merges_blocker,
         ttl_merges_blocker = global_ctx->ttl_merges_blocker,
         need_remove = ctx->need_remove_expired_values,
         merge_list_element = global_ctx->merge_list_element_ptr]() -> bool
     {
-        return merges_blocker->isCancelled()
-            || (need_remove && ttl_merges_blocker->isCancelled())
-            || merge_list_element->is_cancelled.load(std::memory_order_relaxed);
+        return merges_blocker->isCancelled()  // 全局停止合并（如 SYSTEM STOP MERGES）
+            || (need_remove && ttl_merges_blocker->isCancelled())// 本次需要做 TTL 清理，但当前禁止 TTL 合并，则取消
+            || merge_list_element->is_cancelled.load(std::memory_order_relaxed);// 该合并任务被单独标记取消
     };
 
     /// This is the end of preparation. Execution will be per block.
@@ -1007,11 +1060,11 @@ bool MergeTask::VerticalMergeStage::executeVerticalMergeForAllColumns() const
 {
     /// No need to execute this part if it is horizontal merge.
     if (global_ctx->chosen_merge_algorithm != MergeAlgorithm::Vertical)
-        return false;
+        return false; // 返回false，代表执行完成，无需再次调用
 
     /// This is the external cycle condition
-    if (ctx->it_name_and_type == global_ctx->gathering_columns.end())
-        return false;
+    if (ctx->it_name_and_type == global_ctx->gathering_columns.end()) // 已经遍历完了所有的Column
+        return false; // 所有的gathering_columns都已经处理完，不用再调用这个subtask了
 
     switch (ctx->vertical_merge_one_column_state)
     {
@@ -1019,7 +1072,7 @@ bool MergeTask::VerticalMergeStage::executeVerticalMergeForAllColumns() const
         {
             prepareVerticalMergeForOneColumn();
             ctx->vertical_merge_one_column_state = VerticalMergeRuntimeContext::State::NEED_EXECUTE;
-            return true;
+            return true; // 返回true，进入下一个state  NEED_EXECUTE
         }
         case VerticalMergeRuntimeContext::State::NEED_EXECUTE:
         {
@@ -1027,13 +1080,13 @@ bool MergeTask::VerticalMergeStage::executeVerticalMergeForAllColumns() const
                 return true;
 
             ctx->vertical_merge_one_column_state = VerticalMergeRuntimeContext::State::NEED_FINISH;
-            return true;
+            return true; // 返回true，进入下一个state NEED_FINISH
         }
         case VerticalMergeRuntimeContext::State::NEED_FINISH:
         {
             finalizeVerticalMergeForOneColumn();
             ctx->vertical_merge_one_column_state = VerticalMergeRuntimeContext::State::NEED_PREPARE;
-            return true;
+            return true; // 返回true，可以进入下一个state。但是当前已经是最后一个STATE，因此重新进入NEED_PREPARE这个Stage，但是肯定是开始处理下一个column了
         }
     }
     return false;
@@ -1112,7 +1165,7 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
             *global_ctx->data,
             global_ctx->storage_snapshot,
             part,
-            global_ctx->merging_columns.getNames(),
+            global_ctx->merging_columns.getNames(), // 对应的merging_columns，对于Vertical Merge，这个merging column仅仅是索引列，而对于horizontal merge，这个merging_column就是所有的Physical Columns
             /*mark_ranges=*/ {},
             global_ctx->input_rows_filtered,
             /*apply_deleted_mask=*/ true,
@@ -1167,12 +1220,15 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
     ProcessorPtr merged_transform;
 
     /// If merge is vertical we cannot calculate it
+    // 在垂直合并里，输出数据块的行边界要和 MergeTree 的“粒度（granule）/标记（mark）”边界对齐，而不是任意大小的块
+    // granule/mark 是 MergeTree 的最小读写单位（通常≈index_granularity 行，可能自适应）
+    // 垂直合并先在“横向阶段”确定行顺序并写 rows_sources；为保证后续“逐列收集”能按同样边界复放，这里要求块边界严格落在 granule 边界上。
     ctx->blocks_are_granules_size = (global_ctx->chosen_merge_algorithm == MergeAlgorithm::Vertical);
 
     /// There is no sense to have the block size bigger than one granule for merge operations.
     const UInt64 merge_block_size_rows = data_settings->merge_max_block_size;
     const UInt64 merge_block_size_bytes = data_settings->merge_max_block_size_bytes;
-
+    // 通过不同的Merge Mode，添加对应的Merge Transform
     switch (ctx->merging_params.mode)
     {
         case MergeTreeData::MergingParams::Ordinary:
@@ -1241,15 +1297,17 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
         });
     }
 #endif
-
+    // 用户制定了需要去重
     if (global_ctx->deduplicate)
     {
         const auto & virtuals = *global_ctx->data->getVirtualsPtr();
 
         /// We don't want to deduplicate by virtual persistent column.
         /// If deduplicate_by_columns is empty, add all columns except virtuals.
-        if (global_ctx->deduplicate_by_columns.empty())
+        // 如果用户没有显式指定去重列，那么就基于所有"非虚拟持久列"去重
+        if (global_ctx->deduplicate_by_columns.empty()) //
         {
+            // 如果开启去重，那么会强制走HorizontalMerge(参考chooseMergeAlgorithm()方法)，因此这里的merging_columns其实就是所有的列
             for (const auto & column : global_ctx->merging_columns)
             {
                 if (virtuals.tryGet(column.name, VirtualsKind::Persistent))
@@ -1258,17 +1316,18 @@ void MergeTask::ExecuteAndFinalizeHorizontalPart::createMergedStream()
                 global_ctx->deduplicate_by_columns.emplace_back(column.name);
             }
         }
-
+        // 若能基于排序键做去重，用 DistinctSortedTransform；
         if (DistinctSortedTransform::isApplicable(header, sort_description, global_ctx->deduplicate_by_columns))
             builder->addTransform(std::make_shared<DistinctSortedTransform>(
                 builder->getHeader(), sort_description, SizeLimits(), 0 /*limit_hint*/, global_ctx->deduplicate_by_columns));
         else
+            // 否则退化为 DistinctTransform
             builder->addTransform(std::make_shared<DistinctTransform>(
                 builder->getHeader(), SizeLimits(), 0 /*limit_hint*/, global_ctx->deduplicate_by_columns));
     }
 
     PreparedSets::Subqueries subqueries;
-
+    // 如果需要删除过期值，那么需要增加TTLTransform
     if (ctx->need_remove_expired_values)
     {
         auto transform = std::make_shared<TTLTransform>(global_ctx->context, builder->getHeader(), *global_ctx->data, global_ctx->metadata_snapshot, global_ctx->new_data_part, global_ctx->time_of_merge, ctx->force_ttl);
@@ -1305,24 +1364,35 @@ MergeAlgorithm MergeTask::ExecuteAndFinalizeHorizontalPart::chooseMergeAlgorithm
     const size_t total_size_bytes_uncompressed = global_ctx->merge_list_element_ptr->total_size_bytes_uncompressed;
     const auto data_settings = global_ctx->data->getSettings();
 
-    if (global_ctx->deduplicate)
+    if (global_ctx->deduplicate) // 如果开启了去重，那么只能使用horizontal merge
         return MergeAlgorithm::Horizontal;
     if (data_settings->enable_vertical_merge_algorithm == 0)
         return MergeAlgorithm::Horizontal;
-    if (ctx->need_remove_expired_values)
+    if (ctx->need_remove_expired_values) // 如果需要删除过期数据，那么只能使用HorizontalMerge
         return MergeAlgorithm::Horizontal;
     if (global_ctx->future_part->part_format.part_type != MergeTreeDataPartType::Wide)
-        return MergeAlgorithm::Horizontal;
+        return MergeAlgorithm::Horizontal; // WidePart只能使用HorizontalMerge
+    // 因为垂直合并只在“Full”存储类型的 part 上实现/支持。Vertical 需要按列单独读写、记录/重放 rows_sources，并依赖每列独立文件和本地可随机访问的完整存储布局；
+    // 当 storage_type != Full（如紧凑/特殊/远端零拷贝等存储形态）不满足这些前提，无法安全/高效地逐列收集，所以强制退回 Horizontal。
     if (global_ctx->future_part->part_format.storage_type != MergeTreeDataPartStorageType::Full)
         return MergeAlgorithm::Horizontal;
+    /**
+     * 在构造MergePlainMergeTreeTask进而MergeTask的时候会设置 cleanup， 这个cleanup主要用在 MergingParams::Replacing的模式下，
+     * 用来给ReplacingSortedTransform以启用清理逻辑
+     * 当对应的表是ReplacingMergeTree， 并且设置了set allow_experimental_replacing_merge_with_cleanup=1
+     * 那么我们运行 OPTIMIZE TABLE db.tbl FINAL CLEANUP;，就会构造对应的clean_up=true的MergePlainMergeTreeTask 和 MergeTask
+     */
     if (global_ctx->cleanup)
         return MergeAlgorithm::Horizontal;
-
+    /**
+     * allow_vertical_merges_from_compact_to_wide_parts = True，表示如果part含有compact part，也允许(不禁止)使用vertical merge(不代表强制使用，只是不禁止使用)
+     * 所以，如果 allow_vertical_merges_from_compact_to_wide_parts = false，并且含有compact part，那么就绝对不允许使用vertical merge
+     */
     if (!data_settings->allow_vertical_merges_from_compact_to_wide_parts)
     {
         for (const auto & part : global_ctx->future_part->parts)
         {
-            if (!isWidePart(part))
+            if (!isWidePart(part))   // 只要有一个part是compact part，那么就不可能使用vertical merge，只能使用horizontal merge
                 return MergeAlgorithm::Horizontal;
         }
     }
@@ -1332,13 +1402,14 @@ MergeAlgorithm MergeTask::ExecuteAndFinalizeHorizontalPart::chooseMergeAlgorithm
         ctx->merging_params.mode == MergeTreeData::MergingParams::Collapsing ||
         ctx->merging_params.mode == MergeTreeData::MergingParams::Replacing ||
         ctx->merging_params.mode == MergeTreeData::MergingParams::VersionedCollapsing;
-
+    // 列数足够才需要做vertical merge
     bool enough_ordinary_cols = global_ctx->gathering_columns.size() >= data_settings->vertical_merge_algorithm_min_columns_to_activate;
-
+    // 数据行数足够才需要做vertical merge
     bool enough_total_rows = total_rows_count >= data_settings->vertical_merge_algorithm_min_rows_to_activate;
-
+    // 数据量足够才需要做vertical merge
     bool enough_total_bytes = total_size_bytes_uncompressed >= data_settings->vertical_merge_algorithm_min_bytes_to_activate;
 
+    // 这次merge的parts的数量过多，不适合做Vertical Merge
     bool no_parts_overflow = global_ctx->future_part->parts.size() <= RowSourcePart::MAX_PARTS;
 
     auto merge_alg = (is_supported_storage && enough_total_rows && enough_total_bytes && enough_ordinary_cols && no_parts_overflow) ?
@@ -1348,3 +1419,8 @@ MergeAlgorithm MergeTask::ExecuteAndFinalizeHorizontalPart::chooseMergeAlgorithm
 }
 
 }
+Currently we could track
+the launched merge operations per interval,
+the realtime memory usage for merge/mutations,
+the CPU-second used for merge per interval,
+the bytes/rows read by merge per interval...

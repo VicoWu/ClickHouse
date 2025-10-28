@@ -294,7 +294,7 @@ void StorageKafka::shutdown(bool)
         std::lock_guard lock(mutex);
         LOG_TRACE(log, "Closing {} consumers", consumers.size());
         Stopwatch watch;
-        consumers.clear();
+        consumers.clear(); // 在这里进行KafkaConsumer的析构
         LOG_TRACE(log, "Consumers closed. Took {} ms.", watch.elapsedMilliseconds());
     }
 
@@ -453,16 +453,17 @@ void StorageKafka::cleanConsumers()
 
                 UInt64 consumer_last_used_usec = consumer_ptr->getLastUsedUsec();
                 chassert(consumer_last_used_usec <= now_usec);
-                // 当前的KafkaConsumer是否有封装的 cppkafka::Consumer
+                // 当前的KafkaConsumer是否含有封装的 cppkafka::Consumer对象
                 if (!consumer_ptr->hasConsumer())
                     continue;
-                // 搜索 void notInUse()
+                // 搜索 void notInUse()，当前KafkaConsumer是否正在使用中
                 if (consumer_ptr->isInUse()) // 如果当前kafka正在消费，不应该close
                     continue;
 
                 if (now_usec - consumer_last_used_usec > ttl_usec)
                 {
                     LOG_TRACE(log, "Closing #{} consumer (id: {})", i, consumer_ptr->getMemberId());
+                    // KafkaConsumer::moveConsumer 返回对应的 std::shared_ptr<cppkafka::Consumer>
                     consumers_to_close.push_back(consumer_ptr->moveConsumer()); // 这里会unsubscribe并清空消息
                 }
             }

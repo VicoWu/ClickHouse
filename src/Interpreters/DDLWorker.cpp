@@ -667,6 +667,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
     /// and protects from concurrent deletion or the task.
 
     /// It will tryRemove(...) on exception
+    // 一个EphemeralNodeHolder对象，负责通过RAII析构的方式保证这个active节点在任务结束的时候能够被删除
     auto active_node = zkutil::EphemeralNodeHolder::existing(active_node_path, *zookeeper);
 
     /// Try fast path
@@ -684,17 +685,17 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
     if (create_active_res != Coordination::Error::ZOK)
     {
         // 没有成功创建active节点，开始分析原因
-        // 如果既不是ZNONODE 也不是 ZNODEEXISTS，那么不在具体分析原因，直接抛出异常，无法处理
+        // 如果既不是ZNONODE 也不是 ZNODEEXISTS，那么不再进行具体分析原因，直接抛出异常，无法处理
         if (create_active_res != Coordination::Error::ZNONODE && create_active_res != Coordination::Error::ZNODEEXISTS)
         {
             chassert(Coordination::isHardwareError(create_active_res));
             throw Coordination::Exception::fromPath(create_active_res, active_node_path);
         }
-        // 如果create_active_res的状态是节点存在或者节点不存在，那么都需要重新创建节点
+        // 如果create_active_res的状态是节点存在或者节点不存在，那么都需要重新创建节点，除非内存中已经明确看到 task.was_executed=true即task已经被执行过了
 
         /// Status dirs were not created in enqueueQuery(...) or someone is removing entry
         // 正常情况下，状态目录应该在enqueueQuery(...)已经建好，但是现在不存在，因此，先创建
-        if (create_active_res == Coordination::Error::ZNONODE) // 说明 entry 被删了，跳过。
+        if (create_active_res == Coordination::Error::ZNONODE) // 说明 entry 被删了，这时候借助内存状态看看是否要继续执行
         {
             chassert(dynamic_cast<DatabaseReplicatedTask *>(&task) == nullptr);
             if (task.was_executed)
@@ -718,6 +719,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
         {
             /// Connection has been lost and now we are retrying,
             /// but our previous ephemeral node still exists.
+
             zookeeper->deleteEphemeralNodeIfContentMatches(active_node_path, canary_value);
         }
         // 再次尝试创建一个代表当前任务是active状态的临时节点
@@ -759,7 +761,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
                 task.execute_on_leader = storage && taskShouldBeExecutedOnLeader(task.query, storage) && !task.is_circular_replicated;
             }
 
-            // 如果这是一个只能在leader上执行的task，那么，就需要通过tryExecuteQueryOnLeaderReplica方法，保证
+            // 如果这是一个只能在leader上执行的task，那么，就需要通过tryExecuteQueryOnLeaderReplica方法，保证task只在任何一个Shard的一个Replica中执行
             if (task.execute_on_leader)
             {
                 // leader执行，其实对于ReplicatedMergeTree，所有replica都是leader，所以，tryExecuteQueryOnLeaderReplica()
@@ -775,12 +777,14 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
         }
         catch (const Coordination::Exception &)
         {
+            // 这是 ZooKeeper 通信异常（硬件故障、失去连接、权限等）。
+            // 直接 throw; 让上层 DDLWorker::scheduleTasks() 捕获，无论是DatabaseReplicated还是分布式ON CLUSTER DDL
             throw;
         }
         catch (...)
         {
             if (task.is_initial_query)
-                throw;
+                throw; // 我们可以看到，只有DatabaseReplicated的DDL任务执行的时候会将初始节点的task标记为is_initial_query
             tryLogCurrentException(log, "An error occurred before execution of DDL task: ");
             task.execution_status = ExecutionStatus::fromCurrentException("An error occurred before execution");
         }
@@ -790,7 +794,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
             bool status_written_by_table_or_db = task.ops.empty();
             bool is_replicated_database_task = dynamic_cast<DatabaseReplicatedTask *>(&task);
             if (status_written_by_table_or_db || is_replicated_database_task)
-            {   // 如果是replicated_database_task，那么直接返回失败
+            {   // 如果是replicated_database_task，那么直接返回失败，抛出异常，上层调用者在runMainThread中负责重试
                 throw Exception(ErrorCodes::UNFINISHED, "Unexpected error: {}", task.execution_status.message);
             }
             else
@@ -823,17 +827,18 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
 
         // 一次性执行task中的所有的ops
         zookeeper->multi(task.ops);
-        task.ops.clear(); //清空所有的ops
+        task.ops.clear(); // 清空所有的ops，因为他们已经执行成功
     }
 
     /// Active node was removed in multi ops
     active_node->setAlreadyRemoved();
     /**
-     * 普通的DDLTask没有实现该方法，即什么都不做
-     * 但是DatabaseReplicatedTask::createSyncedNodeIfNeed重写了该方法
+     * 普通的DDLTask没有实现该方法，即在创建了finished/节点以后什么都不做，但是对于DatabaseReplicated，会额外创建一个Synced/ 节点
+     * 但是 DatabaseReplicatedTask::createSyncedNodeIfNeed重写了该方法
      */
     task.createSyncedNodeIfNeed(zookeeper);
-    updateMaxDDLEntryID(task.entry_name); // 更新max_id的值
+    // 更新max_id的值，包括 DatabaseReplicatedDDLWorker 在内的所有DDLWorker都会进行这个操作，只不过 DatabaseReplicatedDDLWorker的MAX_ID是数据库内部级别的
+    updateMaxDDLEntryID(task.entry_name);
     task.completely_processed = true; // 完全完成，任务执行完成，同时完成了Keeper上的任务维护
     subsequent_errors_count = 0;
 }
@@ -922,6 +927,7 @@ bool DDLWorker::tryExecuteQueryOnLeaderReplica(
 
     /// Leader replica creates is_executed_path node on successful query execution.
     /// We will remove create_shard_flag from zk operations list, if current replica is just waiting for leader to execute the query.
+    // 构造一个请求，而不是直接执行is_executed_path节点的创建
     auto create_shard_flag = zkutil::makeCreateRequest(is_executed_path, task.host_id_str, zkutil::CreateMode::Persistent);
 
     /// Node exists, or we will create or we will get an exception
@@ -1340,6 +1346,7 @@ void DDLWorker::runMainThread()
                 /// Stopped
                 // 尝试进行重新的初始化，返回false，表示重新初始化失败，或者收到了stop_flag
                 // 如果返回true，代表初始化成功，因此在initializeMainThread()中会把initialized置为true，代表已经进行了成功初始化
+                // DatabaseReplicatedDDLWorker重写了该方法
                 if (!initializeMainThread())
                     break;
                 LOG_DEBUG(log, "Initialized DDLWorker thread");

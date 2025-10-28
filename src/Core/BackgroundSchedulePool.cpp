@@ -157,7 +157,7 @@ Coordination::WatchCallback BackgroundSchedulePoolTaskInfo::getWatchCallback()
 
 BackgroundSchedulePool::BackgroundSchedulePool(size_t size_, CurrentMetrics::Metric tasks_metric_, CurrentMetrics::Metric size_metric_, const char *thread_name_)
     : tasks_metric(tasks_metric_)
-    , size_metric(size_metric_, size_)
+    , size_metric(size_metric_, size_) //  将
     , thread_name(thread_name_)
 {
     LOG_INFO(getLogger("BackgroundSchedulePool/" + thread_name), "Create BackgroundSchedulePool with {} threads", size_);
