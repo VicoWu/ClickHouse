@@ -107,7 +107,12 @@ def main():
 
     cmake_cmd = BUILD_TYPE_TO_CMAKE[build_type]
     info = Info()
+    print(f"Currently all envs is [{info.env}], "
+          f"job name is [{info.job_name}], "
+          f"env dump is [{info.dump()}], "
+          f"is push event: [{info.is_push_event}]")
     if not info.is_local_run:
+        print(f"Set sccache information")
         # Default timeout (10min), can be too low, we run this in docker
         # anyway, will be terminated once the build is finished
         os.environ["SCCACHE_IDLE_TIMEOUT"] = "7200"
@@ -117,6 +122,9 @@ def main():
         os.environ["CTCACHE_DIR"] = f"{build_dir}/ccache/clang-tidy-cache"
         os.environ["CTCACHE_S3_BUCKET"] = Settings.S3_ARTIFACT_PATH
         os.environ["CTCACHE_S3_FOLDER"] = "ccache/clang-tidy-cache"
+    else:
+        print(f"Not set sccache with {info.is_local_run}")
+
     if info.pr_number == 0:
         cmake_cmd += " -DCLICKHOUSE_OFFICIAL_BUILD=1"
     cmake_cmd += f" {current_directory}"
