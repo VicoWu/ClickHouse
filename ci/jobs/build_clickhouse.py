@@ -110,7 +110,8 @@ def main():
     print(f"Currently all envs is [{info.env}], "
           f"job name is [{info.job_name}], "
           f"env dump is [{info.dump()}], "
-          f"is push event: [{info.is_push_event}]")
+          f"is push event: [{info.is_push_event}]"
+          f"is local run: [{info.is_local_run}]")
     if not info.is_local_run:
         print(f"Set sccache information")
         # Default timeout (10min), can be too low, we run this in docker
