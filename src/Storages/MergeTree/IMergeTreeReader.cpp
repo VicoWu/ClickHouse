@@ -136,12 +136,20 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
     }
 }
 
+/**
+ * 这里的res_columns就是请求的列，比如，当前的VerticalMergeStage正在请求的例，在我们的例子中，
+ * 这个列是Map<LowCardinality<String>,String>，而不是缺失的那5个非LowCardinality列，但是方法evaluateMissingDefaults
+ * 的触发确实是有那5列缺失触发的
+ * @param additional_columns
+ * @param res_columns
+ */
 void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns & res_columns) const
 {
     try
     {
         size_t num_columns = original_requested_columns.size();
 
+        // 在构造 IMergeTreeReader 的时候传入的列一定是当前处理的列
         if (res_columns.size() != num_columns)
             throw Exception(ErrorCodes::LOGICAL_ERROR, "invalid number of columns passed to MergeTreeReader::fillMissingColumns. "
                             "Expected {}, got {}", num_columns, res_columns.size());
@@ -154,6 +162,7 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
         /// TODO: rewrite with columns interface. It will be possible after changes in ExpressionActions.
 
         auto it = original_requested_columns.begin();
+        // 遍历构造IMergeTreeReader的时候传入的参数列 original_requested_columns
         for (size_t pos = 0; pos < num_columns; ++pos, ++it)
         {
             auto name_in_storage = it->getNameInStorage();
@@ -189,6 +198,7 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
             if (it->isSubcolumn())
             {
                 const auto & type_in_storage = it->getTypeInStorage();
+                // 在这里报错了
                 res_columns[pos] = type_in_storage->getSubcolumn(it->getSubcolumnName(), res_columns[pos]);
             }
         }
