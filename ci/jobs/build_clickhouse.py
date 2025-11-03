@@ -150,10 +150,13 @@ def main():
         )
         res = results[-1].is_ok()
 
+    print(f" pr number is {info.pr_number}, push event is : {info.is_push_event}")
     if info.pr_number == 0 and info.is_push_event:
         version_dict = info.get_kv_data("version")
+        print(f" We are using version_dict from kv data {version_dict}")
     else:
         version_dict = CHVersion.get_current_version_as_dict()
+        print(f" We are using version_dict from current version {version_dict}")
 
     if res and JobStages.CMAKE in stages:
         assert version_dict, "Failed to determine build version"
