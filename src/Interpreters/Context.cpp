@@ -5379,8 +5379,8 @@ void Context::initializeBackgroundExecutorsIfNeeded()
     shared->merge_mutate_executor = std::make_shared<MergeMutateBackgroundExecutor>
     (
         "MergeMutate",
-        /*max_threads_count*/background_pool_size,
-        /*max_tasks_count*/background_pool_max_tasks_count,
+        /*max_threads_count*/background_pool_size, // 通过 background_pool_size 设置
+        /*max_tasks_count*/background_pool_max_tasks_count, // 通过 background_pool_size * background_merges_mutations_concurrency_ratio 来计算
         CurrentMetrics::BackgroundMergesAndMutationsPoolTask,
         CurrentMetrics::BackgroundMergesAndMutationsPoolSize,
         background_merges_mutations_scheduling_policy

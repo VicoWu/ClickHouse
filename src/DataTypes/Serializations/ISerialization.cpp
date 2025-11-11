@@ -158,25 +158,27 @@ namespace
 
 using SubstreamIterator = ISerialization::SubstreamPath::const_iterator;
 
+
 String getNameForSubstreamPath(
     String stream_name,
-    SubstreamIterator begin,
-    SubstreamIterator end,
+    SubstreamIterator begin, // 这个SubstreamPath的迭代器的起始位置
+    SubstreamIterator end, // 这个SubstreamPath的迭代器的结束位置
     bool escape_tuple_delimiter)
 {
     using Substream = ISerialization::Substream;
 
     size_t array_level = 0;
+    // 迭代这个SubstreamPath里面的所有的Substream， 拼接成stream_name
     for (auto it = begin; it != end; ++it)
     {
         if (it->type == Substream::NullMap)
             stream_name += ".null";
         else if (it->type == Substream::ArraySizes)
-            stream_name += ".size" + toString(array_level);
+            stream_name += ".size" + toString(array_level); // .size0, .size1
         else if (it->type == Substream::ArrayElements)
-            ++array_level;
+            ++array_level; // array的层级往上加，即，如果不是第一层，就不需要处理offset添加size0
         else if (it->type == Substream::DictionaryKeys)
-            stream_name += ".dict";
+            stream_name += ".dict"; // 追加字典
         else if (it->type == Substream::SparseOffsets)
             stream_name += ".sparse.idx";
         else if (Substream::named_types.contains(it->type))
@@ -215,6 +217,9 @@ String getNameForSubstreamPath(
 
 }
 
+/**
+ * struct SubstreamPath : public std::vector<Substream>
+ */
 String ISerialization::getFileNameForStream(const NameAndTypePair & column, const SubstreamPath & path)
 {
     return getFileNameForStream(column.getNameInStorage(), path);
@@ -240,15 +245,28 @@ static bool isPossibleOffsetsOfNested(const ISerialization::SubstreamPath & path
     return false;
 }
 
+/**
+ * 调用者是 ISerialization::getFileNameForStream，可以看到，这里是生成对应的 SubstreamPath 对应的文件名称，记住，SubstreamPath是整个递归生成的vector<substream>(复合类型到最底层的叶子类型形成递归)
+ * ，为当前的这个递归状态生成对应的文件名，比如M.size0, m.key, m.value, m.dict等
+ *
+ */
 String ISerialization::getFileNameForStream(const String & name_in_storage, const SubstreamPath & path)
 {
     String stream_name;
     auto nested_storage_name = Nested::extractTableName(name_in_storage);
+    // 如果这的确是一个复合子列，那么，取父列
     if (name_in_storage != nested_storage_name && isPossibleOffsetsOfNested(path))
         stream_name = escapeForFileName(nested_storage_name);
-    else
-        stream_name = escapeForFileName(name_in_storage);
-
+    else // 这不是一个复合子列，取原名称
+        stream_name = escapeForFileName(name_in_storage); //可以看到，对于普通列，这里的stream_name就是column的名字
+    // 返回当前这个SubstreamPath所对应的名字，比如:
+    /**
+    *    key 的 LC 字典
+    *        初始 "M"
+    *        path=[ArrayElements, TupleElement("key"), LowCardinalityDictionaryKeys]
+    *        迭代同上，最后 DictionaryKeys → 追加 ".dict"
+    *        结果: "M.key.dict"
+    */
     return getNameForSubstreamPath(std::move(stream_name), path.begin(), path.end(), true);
 }
 

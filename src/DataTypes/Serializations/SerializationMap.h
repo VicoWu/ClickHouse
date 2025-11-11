@@ -9,8 +9,8 @@ namespace DB
 class SerializationMap final : public SimpleTextSerialization
 {
 private:
-    SerializationPtr key;
-    SerializationPtr value;
+    SerializationPtr key; // key的序列化对象
+    SerializationPtr value; // value的序列化对象
 
     /// 'nested' is an Array(Tuple(key_type, value_type))
     SerializationPtr nested;

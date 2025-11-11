@@ -36,10 +36,10 @@ MergeTreeBackgroundExecutor<Queue>::MergeTreeBackgroundExecutor(
     CurrentMetrics::Metric max_tasks_metric_,
     std::string_view policy)
     : name(name_)
-    , threads_count(threads_count_)
-    , max_tasks_count(max_tasks_count_)
-    , metric(metric_)
-    , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // active + pending  max_tasks_metric负责将 max_tasks_metric_的值写入成为2 * max_tasks_count
+    , threads_count(threads_count_)  //  background_pool_size
+    , max_tasks_count(max_tasks_count_) // // background_pool_size * background_merges_mutations_concurrency_ratio
+    , metric(metric_) //  CurrentMetrics::BackgroundMergesAndMutationsPoolTask
+    , max_tasks_metric(max_tasks_metric_, 2 * max_tasks_count) // BackgroundMergesAndMutationsPoolSize, active + pending  max_tasks_metric负责将 max_tasks_metric_的值写入成为2 * max_tasks_count
     , pool(std::make_unique<ThreadPool>(
           CurrentMetrics::MergeTreeBackgroundExecutorThreads, CurrentMetrics::MergeTreeBackgroundExecutorThreadsActive, CurrentMetrics::MergeTreeBackgroundExecutorThreadsScheduled))
 {
@@ -221,7 +221,10 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
     DENY_ALLOCATIONS_IN_SCOPE;
 
     /// All operations with queues are considered no to do any allocations
-
+    /**
+     * 将task从active队列移除。
+     * 只要本轮执行结束，无论task是否需要继续执行，都需要从active中移除
+     */
     auto erase_from_active = [this](TaskRuntimeDataPtr & item_) TSA_REQUIRES(mutex)
     {
         active.erase(std::remove(active.begin(), active.end(), item_), active.end());
@@ -236,12 +239,13 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
         /// So, the destructor of a task and the destructor of a storage will be executed concurrently.
         NOEXCEPT_SCOPE({
             ALLOW_ALLOCATIONS_IN_SCOPE;
-            item_->task.reset();
+            item_->task.reset(); // 解除智能指针，引用减去1，如果没有其它引用，那么对象就会销毁
         });
-        item_->is_done.set();
-        item_.reset();
+        item_->is_done.set(); // 将is_done置位，这样，其它在监听这个event的线程就可以收到通知解除阻塞
+        item_.reset(); // 解除智能指针，引用减去1，如果没有其它引用，那么对象就会销毁
     };
 
+    // 回调方法，当Task在协程中没有执行完，那么就会重新放入pending队列，等待下一次调度
     auto on_task_restart = [this](TaskRuntimeDataPtr && item_) TSA_REQUIRES(mutex)
     {
         /// After the `guard` destruction `item` has to be in moved from state
@@ -254,10 +258,13 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
 
     String query_id;
 
+    /**
+     * 当task已经彻底执行完成，那么就无需再放入pending中了，可以完全标记执行万传给你
+     */
     auto release_task = [this, &erase_from_active, &on_task_done, &query_id](TaskRuntimeDataPtr && item_)
     {
         std::lock_guard guard(mutex);
-
+        // 从active queue中移除
         erase_from_active(item_);
         has_tasks.notify_one();
 
@@ -273,17 +280,17 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
         {
             printExceptionWithRespectToAbort(log, query_id);
         }
-
+        // 析构这个任务
         on_task_done(std::move(item_));
     };
-
+    // task是否需要再次执行(本轮没有执行完)
     bool need_execute_again = false;
 
     try
     {
         ALLOW_ALLOCATIONS_IN_SCOPE;
         query_id = item->task->getQueryId();
-        need_execute_again = item->task->executeStep();
+        need_execute_again = item->task->executeStep(); // 调用IExecutableTask::executeStep()的实现
     }
     catch (...)
     {
@@ -291,20 +298,20 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
             printExceptionWithRespectToAbort(log, query_id);
         /// Release the task with exception context.
         /// An exception context is needed to proper delete write buffers without finalization
-        release_task(std::move(item));
+        release_task(std::move(item)); // 发生异常，不再执行，task失败
         return;
     }
 
-    if (!need_execute_again)
+    if (!need_execute_again) // 这个task已经执行结束
     {
         release_task(std::move(item));
         return;
     }
-
+    // 这个task只执行了一部分，还需要继续执行
     {
         std::lock_guard guard(mutex);
-        erase_from_active(item);
-
+        erase_from_active(item); // 先从active中移除，准备放回到pending接受再次调度，即只要task需要被再次调度，一定要经历active -> pending -> active的过程
+        // 这个task还没有执行完，但是发现这个task正在被移除(这个task所在的storage或者表正在被关停)，因此也不再执行
         if (item->is_currently_deleting)
         {
             try
@@ -316,11 +323,12 @@ void MergeTreeBackgroundExecutor<Queue>::routine(TaskRuntimeDataPtr item)
             catch (...)
             {
                 printExceptionWithRespectToAbort(log, query_id);
-                on_task_done(std::move(item));
-                return;
+                on_task_done(std::move(item)); // 析构这个任务
+                return; // 直接返回，无需再执行了
             }
         }
 
+        // 将这个task重新放回到pending队列，接受下次调度
         on_task_restart(std::move(item));
     }
 }

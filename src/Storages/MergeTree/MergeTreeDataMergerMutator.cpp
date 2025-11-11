@@ -112,8 +112,10 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartsSizeForMerge(size_t max_coun
 UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
 {
     const auto data_settings = data.getSettings();
+    // 当前 active + pending 中的任务数量
     size_t occupied = CurrentMetrics::values[CurrentMetrics::BackgroundMergesAndMutationsPoolTask].load(std::memory_order_relaxed);
 
+    // 这个replica最多允许被occupied的任务数量，默认是0，即这里不进行限制，但是很显然， 后面的max_tasks_count 也会限制的
     if (data_settings->max_number_of_mutations_for_replica > 0 &&
         occupied >= data_settings->max_number_of_mutations_for_replica)
         return 0;
@@ -126,7 +128,7 @@ UInt64 MergeTreeDataMergerMutator::getMaxSourcePartSizeForMutation() const
     if (occupied <= 1
         || max_tasks_count - occupied >= data_settings->number_of_free_entries_in_pool_to_execute_mutation)
         return static_cast<UInt64>(disk_space / DISK_USAGE_COEFFICIENT_TO_RESERVE);
-
+    // 已经没有多余空间，返回0，最大的part size 是0，即代表不允许mutate
     return 0;
 }
 

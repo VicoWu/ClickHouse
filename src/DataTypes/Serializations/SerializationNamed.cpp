@@ -20,6 +20,12 @@ SerializationNamed::SerializationNamed(
         throw Exception(ErrorCodes::LOGICAL_ERROR, "SerializationNamed doesn't support substream type {}", substream_type);
 }
 
+/**
+ * 是一个封装类型，本层并不产生一个Substream，而是依赖下层的nested_serialization
+ * @param settings
+ * @param callback
+ * @param data
+ */
 void SerializationNamed::enumerateStreams(
     EnumerateStreamsSettings & settings,
     const StreamCallback & callback,
@@ -28,7 +34,10 @@ void SerializationNamed::enumerateStreams(
     addToPath(settings.path);
     settings.path.back().data = data;
     settings.path.back().creator = std::make_shared<SubcolumnCreator>(name, substream_type);
-
+    /**
+     * 如果是一个LowCardinality(String)，那么这里就是 SerializationLowCardinality::enumerateStreams
+     * 如果是普通的String，那么就是 SerializationString::enumerateStreams
+     */
     nested_serialization->enumerateStreams(settings, callback, data);
     settings.path.pop_back();
 }

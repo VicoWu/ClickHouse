@@ -239,7 +239,7 @@ public:
 
     struct EnumerateStreamsSettings
     {
-        SubstreamPath path;
+        SubstreamPath path; // 在一次enumerate过程中生成的所有substream, std::vector<Substream>
         bool position_independent_encoding = true;
         /// If set to false, don't enumerate dynamic subcolumns
         /// (such as dynamic types in Dynamic column or dynamic paths in JSON column).

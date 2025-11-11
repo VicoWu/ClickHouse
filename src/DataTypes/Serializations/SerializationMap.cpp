@@ -390,6 +390,14 @@ bool SerializationMap::tryDeserializeTextCSV(IColumn & column, ReadBuffer & istr
     return tryDeserializeText(column, rb, settings, true);
 }
 
+/**
+ * Map 是语法糖：Map(K,V) ≡ Array(Tuple(K,V))。因此 Map 自己不产出子流，Map 层只负责“把 Map 换成 Array(Tuple)”的 next_data 转交；
+ * 只是把“嵌套类型/列”改写为 nested（=SerializationArray(SerializationTuple(...)))，
+ * 然后把“新的 data”（指向嵌套的类型/列/状态）转交给 nested->enumerateStreams。
+ * @param settings
+ * @param callback
+ * @param data
+ */
 void SerializationMap::enumerateStreams(
     EnumerateStreamsSettings & settings,
     const StreamCallback & callback,
@@ -400,7 +408,7 @@ void SerializationMap::enumerateStreams(
         .withColumn(data.column ? assert_cast<const ColumnMap &>(*data.column).getNestedColumnPtr() : nullptr)
         .withSerializationInfo(data.serialization_info)
         .withDeserializeState(data.deserialize_state);
-
+    // 把工作完全交给 Array 层
     nested->enumerateStreams(settings, callback, next_data);
 }
 

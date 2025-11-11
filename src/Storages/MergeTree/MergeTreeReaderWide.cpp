@@ -51,6 +51,7 @@ MergeTreeReaderWide::MergeTreeReaderWide(
 {
     try
     {
+        //
         for (size_t i = 0; i < columns_to_read.size(); ++i)
             addStreams(columns_to_read[i], serializations[i]);
     }
@@ -204,6 +205,7 @@ size_t MergeTreeReaderWide::readRows(
     return read_rows;
 }
 
+
 void MergeTreeReaderWide::addStreams(
     const NameAndTypePair & name_and_type,
     const SerializationPtr & serialization)
@@ -211,12 +213,17 @@ void MergeTreeReaderWide::addStreams(
     bool has_any_stream = false;
     bool has_all_streams = true;
 
+    /**
+     * SubstreamPath & substream_path 指的是逻辑“子流路径”，是一个 vector<Substream>，而不是文件路径
+     * 描述从外到内的类型层级（如 ArraySizes → ArrayElements → TupleElement("key") → LowCardinalityDictionaryKeys）。
+     */
     ISerialization::StreamCallback callback = [&] (const ISerialization::SubstreamPath & substream_path)
     {
         /// Don't create streams for ephemeral subcolumns that don't store any real data.
         if (ISerialization::isEphemeralSubcolumn(substream_path, substream_path.size()))
             return;
-
+        // 获取这个column的对应的stream，如果stream不存在，那么意味着stream 缺失，对应的column就会被添加到partially_read_columns中
+        // stream_name: 由列名和 SubstreamPath 按规则拼出的“子流名”字符串（如 M.size0、M.key、M.key.dict、M.value）。
         auto stream_name = IMergeTreeDataPart::getStreamNameForColumn(name_and_type, substream_path, data_part_info_for_read->getChecksums());
 
         /** If data file is missing then we will not try to open it.
@@ -224,22 +231,23 @@ void MergeTreeReaderWide::addStreams(
           */
         if (!stream_name)
         {
-            has_all_streams = false;
+            has_all_streams = false; // 发现了stream 缺失
             return;
         }
-
+        // 这个streams已经收集过
         if (streams.contains(*stream_name))
         {
             has_any_stream = true;
             return;
         }
 
+        // 有了这个stream的名字，比如M.key, M.key.dict, 然后就将这个stream添加到MergeTreeReaderWide对象中，起始就是读取这个Stream的文件了，比如M.key.bin和M.key.cmrk文件
         addStream(substream_path, *stream_name);
         has_any_stream = true;
     };
-
+    // 针对这个column，开始进行stream的枚举，如果这个column是复合类型，这个枚举可能是递归进行的
     serialization->enumerateStreams(callback);
-
+    // 如果这个column的stream 枚举结果显示这个column有stream暗示不是有全部stream，那么就将这个column添加到partially_read_columns中
     if (has_any_stream && !has_all_streams)
         partially_read_columns.insert(name_and_type.name);
 }

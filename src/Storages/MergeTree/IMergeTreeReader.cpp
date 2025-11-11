@@ -59,7 +59,7 @@ IMergeTreeReader::IMergeTreeReader(
     for (const auto & column : requested_columns)
     {
         columns_to_read.emplace_back(getColumnInPart(column));
-        serializations.emplace_back(getSerializationInPart(column));
+        serializations.emplace_back(getSerializationInPart(column)); // 每一个Column的序列化实现类ISerialization存放在serializations中
     }
 }
 
@@ -116,11 +116,13 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
     {
         NamesAndTypesList available_columns(columns_to_read.begin(), columns_to_read.end());
         DB::fillMissingColumns(
-            res_columns, num_rows,
-            Nested::convertToSubcolumns(requested_columns),
-            Nested::convertToSubcolumns(available_columns),
-            partially_read_columns, storage_snapshot->metadata);
-
+            res_columns, // 带出返回值
+            num_rows, // 行号
+            Nested::convertToSubcolumns(requested_columns), // 请求的列
+            Nested::convertToSubcolumns(available_columns), // part中实际的column
+            partially_read_columns,
+            storage_snapshot->metadata);
+        // 只要res_columns中有任何一个Column是nullptr，那么 should_evaluate_missing_defaults = true
         should_evaluate_missing_defaults = std::any_of(
             res_columns.begin(), res_columns.end(), [](const auto & column) { return column == nullptr; });
     }

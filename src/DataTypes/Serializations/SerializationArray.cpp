@@ -221,6 +221,13 @@ ColumnPtr SerializationArray::SubcolumnCreator::create(const ColumnPtr & prev) c
     return ColumnArray::create(prev, offsets);
 }
 
+/**
+ * 会产生两类路径，ArraySizes(offsets子流)和ArrayElements(元素子流)
+ * Array 层必产出 sizeN（M.size0， ArraySizes），并把元素分支交给 Tuple；
+ * @param settings
+ * @param callback
+ * @param data
+ */
 void SerializationArray::enumerateStreams(
     EnumerateStreamsSettings & settings,
     const StreamCallback & callback,
@@ -230,6 +237,8 @@ void SerializationArray::enumerateStreams(
     const auto * column_array = data.column ? &assert_cast<const ColumnArray &>(*data.column) : nullptr;
     auto offsets = column_array ? column_array->getOffsetsPtr() : nullptr;
 
+    // getArrayLevel(path) = 当前数组深度（外层 size0，内层 size1 …）。
+    // 所以对于普通的Map，数组的深度是1，因此getArrayLevel(settings.path)=0
     auto subcolumn_name = "size" + std::to_string(getArrayLevel(settings.path));
     auto offsets_serialization = std::make_shared<SerializationNamed>(
         std::make_shared<SerializationNumber<UInt64>>(),
@@ -238,27 +247,37 @@ void SerializationArray::enumerateStreams(
     auto offsets_column = offsets && !settings.position_independent_encoding
         ? arrayOffsetsToSizes(*offsets)
         : offsets;
-
+    // 把以ArraySizes为Type构造一个Substream对象，并添加到SubstreamPath中
     settings.path.push_back(Substream::ArraySizes);
+    // 设置这个刚加进来的Substream的data数据
     settings.path.back().data = SubstreamData(offsets_serialization)
         .withType(type_array ? std::make_shared<DataTypeUInt64>() : nullptr)
         .withColumn(std::move(offsets_column))
         .withSerializationInfo(data.serialization_info);
-
+    // callback定义在 MergeTreeReaderWide::addStreams
+    // 每调用一次 callback，就生成了一个substream。这里可以看到，在SerializationMap::enumerateStreams中并没有调用callback
+    // 说您在Map层没有对应子流，在Array层有一个子流，这是Map的第一个子流，是对应Array的size信息流
     callback(settings.path);
 
+    /**
+     * 刚刚已经通过调用callback来生成了ArraySizes的子流，此时，对于这个Array的元素，需要继续递归进行，因此，
+     * 把刚刚push进来的ArraySizes(即以ArraySizes为Type的Substream添加进来)进行替换
+     * ，替换成ArrayElements子流(但是并没有调用callback来生成这个子流)
+     * 把 path 的尾元素改成 ArrayElements，并附带 creator（SubcolumnCreator(offsets)，给下层在需要时复原子列用）。
+     */
     settings.path.back() = Substream::ArrayElements;
-    settings.path.back().data = data;
-    settings.path.back().creator = std::make_shared<SubcolumnCreator>(offsets);
+    settings.path.back().data = data; // 设置这个Array Substream的data
+    settings.path.back().creator = std::make_shared<SubcolumnCreator>(offsets); // 设置这个Array Substream的creator
 
     auto next_data = SubstreamData(nested)
-        .withType(type_array ? type_array->getNestedType() : nullptr)
+        .withType(type_array ? type_array->getNestedType() : nullptr) // 如果是一个array，那么下一层的类型就是 type_array->getNestedType() ，否则就是null(没有下层)
         .withColumn(column_array ? column_array->getDataPtr() : nullptr)
         .withSerializationInfo(data.serialization_info)
         .withDeserializeState(data.deserialize_state);
-
+    // Map转换成的Array的下层是Tuple，因此，这里的nested是SerializationTuple::enumerateStreams方法
+    // 注意，只有Map的实现是Array(Tuple(K,V))，普通Array比如Array(String)，它的下层就不一定是Tuple
     nested->enumerateStreams(settings, callback, next_data);
-    settings.path.pop_back();
+    settings.path.pop_back(); // 将刚刚push进来的
 }
 
 void SerializationArray::serializeBinaryBulkStatePrefix(

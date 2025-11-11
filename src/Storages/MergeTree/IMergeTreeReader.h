@@ -87,7 +87,7 @@ protected:
     /// which may differ from table metadata.
     NamesAndTypes columns_to_read;
     /// Actual serialization of columns in part.
-    Serializations serializations;
+    Serializations serializations; // std::vector<SerializationPtr>;
 
     UncompressedCache * const uncompressed_cache;
     MarkCache * const mark_cache;

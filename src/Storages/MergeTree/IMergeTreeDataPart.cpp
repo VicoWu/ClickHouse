@@ -2408,18 +2408,18 @@ std::optional<String> IMergeTreeDataPart::getStreamNameOrHash(
 }
 
 std::optional<String> IMergeTreeDataPart::getStreamNameOrHash(
-    const String & stream_name,
-    const String & extension,
+    const String & stream_name, // 不带后缀的Stream的名字
+    const String & extension,   // 这个Stream的后缀
     const IDataPartStorage & storage_)
 {
     if (storage_.exists(stream_name + extension))
         return stream_name;
-
+    // 如果直接以stream名称为前缀的stream文件在文件系统上不存在，那么就看看以hash为名称的是否存在
     auto hash = sipHash128String(stream_name);
-    if (storage_.exists(hash + extension))
+    if (storage_.exists(hash + extension)) // 以Hash为名称
         return hash;
 
-    return {};
+    return {}; // 都不存在，返回空
 }
 
 std::optional<String> IMergeTreeDataPart::getStreamNameForColumn(
@@ -2436,6 +2436,9 @@ std::optional<String> IMergeTreeDataPart::getStreamNameForColumn(
     const ISerialization::SubstreamPath & substream_path,
     const Checksums & checksums_)
 {
+    /**
+     * struct SubstreamPath : public std::vector<Substream>
+     */
     auto stream_name = ISerialization::getFileNameForStream(column, substream_path);
     return getStreamNameOrHash(stream_name, checksums_);
 }

@@ -73,7 +73,9 @@ public:
     const ElementSerializations & getElementsSerializations() const { return elems; }
 
 private:
-    ElementSerializations elems;
+    //    using ElementSerializationPtr = std::shared_ptr<const SerializationNamed>;
+    //    using ElementSerializations = std::vector<ElementSerializationPtr>;
+    ElementSerializations elems; //
     bool have_explicit_names;
 
     size_t getPositionByName(const String & name) const;

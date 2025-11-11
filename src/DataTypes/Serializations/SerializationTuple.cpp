@@ -635,6 +635,13 @@ struct DeserializeBinaryBulkStateTuple : public ISerialization::DeserializeBinar
     std::vector<ISerialization::DeserializeBinaryBulkStatePtr> states;
 };
 
+/**
+ * 为Tuple生成stream
+ * 从方法 中可以看到,在Tuple本身这一层并没有通过调用callback生成对应的子流，而是在下层生成子流
+ * @param settings
+ * @param callback
+ * @param data
+ */
 void SerializationTuple::enumerateStreams(
     EnumerateStreamsSettings & settings,
     const StreamCallback & callback,
@@ -650,7 +657,8 @@ void SerializationTuple::enumerateStreams(
     const auto * column_tuple = data.column ? &assert_cast<const ColumnTuple &>(*data.column) : nullptr;
     const auto * info_tuple = data.serialization_info ? &assert_cast<const SerializationInfoTuple &>(*data.serialization_info) : nullptr;
     const auto * tuple_deserialize_state = data.deserialize_state ? checkAndGetState<DeserializeBinaryBulkStateTuple>(data.deserialize_state) : nullptr;
-
+    // 遍历tuple的每一个元素(注意，一个tuple并不一定是二元tuple，有可能是多元tuple。只有Map(String, String) -> Array(Tuple(String, String))所
+    // 对应的Tuple才是二元tuple，即elems[0]就是key, elems[1]就是value)
     for (size_t i = 0; i < elems.size(); ++i)
     {
         auto next_data = SubstreamData(elems[i])
@@ -658,7 +666,8 @@ void SerializationTuple::enumerateStreams(
             .withColumn(column_tuple ? column_tuple->getColumnPtr(i) : nullptr)
             .withSerializationInfo(info_tuple ? info_tuple->getElementInfo(i) : nullptr)
             .withDeserializeState(tuple_deserialize_state ? tuple_deserialize_state->states[i] : nullptr);
-
+        // 对Tuple中的每一个元素调用 enumerateStreams
+        // 每一个elems[i]是一个 SerializationNamed，因此这里的enumeratStreams都是调用 SerializationNamed::enumerateStreams
         elems[i]->enumerateStreams(settings, callback, next_data);
     }
 }
