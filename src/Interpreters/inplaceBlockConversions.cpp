@@ -346,16 +346,21 @@ void fillMissingColumns(
     auto offsets_columns = collectOffsetsColumns(available_columns, res_columns);
 
     /// Insert default values only for columns without default expressions.
-    auto requested_column = requested_columns.begin();
+    auto requested_column = requested_columns.begin(); // 对于vertical merge，这里的requested_columns其实仅仅是当前正在进行merge的列，比如，当前的Map列
     for (size_t i = 0; i < num_columns; ++i, ++requested_column)
     {
         if (res_columns[i] && partially_read_columns.contains(requested_column->name))
-            res_columns[i] = nullptr;
+            res_columns[i] = nullptr; // 只要该列有missing stream，那么就先把res_columns[i]置为nullptr，但是这不是最终设置，后面还会
 
         /// Nothing to fill or default should be filled in evaluateMissingDefaults
+        /**
+         * 如果 hasDefault(metadata_snapshot, requested_column) 为 true,
+         *  直接 continue，不在 fillMissingColumns 内生成任何数据，保持 res_columns[i] 为 nullptr
+         *  目的：让 evaluateMissingDefaults 去按 DEFAULT 表达式计算，可能依赖其它列
+         */
         if (res_columns[i] || hasDefault(metadata_snapshot, *requested_column))
-            continue;
-
+            continue; // 如果 res_columns[i] 不为空，或者，虽然为空，但是有default值，那么直接返回
+        // 执行到这里，说明 res_columns[i] 为空，并且目前没有default值，那么在方法内部“就地”补上类型默认值：
         std::vector<ColumnPtr> current_offsets;
         size_t num_dimensions = 0;
 
