@@ -139,8 +139,10 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
 }
 
 /**
- * 这里的res_columns就是请求的列，比如，当前的VerticalMergeStage正在请求的例
- * Columns & res_columns 与 original_requested_columns(构造IMergeTreeReader的时候传入的) 对齐，
+ * 新增的 host 列在该 part 中不存在，需要填 DEFAULT，这一步把 “补默认值” 打开了，因此调用IMergeTreeReader::evaluateMissingDefaults。
+ * 但是在IMergeTreeReader::evaluateMissingDefaults中抛异常的确实另外的列tagGroup1
+ * 这里的res_columns就是请求的列，比如，当前的VerticalMergeStage正在请求的例，在这里，包含 host和tagGroup1.key两个列，其中tagGroup1.key是子列
+ * Columns & res_columns 与 original_requested_columns(构造IMergeTreeReader的时候传入的) 对齐，由于 host缺失，因此res_columns中它的对应位置是nullptr
  * 代表调用方本次请求的列集：有可能是基列，也可能是子列。
  * 它和 original_requested_columns 一一对应，位置相同；已读出的列是非空指针，缺失的列为 nullptr，后续默认值计算会据此填满。
  *
@@ -186,13 +188,16 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
             // 它和 original_requested_columns 一一对应，位置相同；已读出的列是非空指针，缺失的列为 nullptr，后续默认值计算会据此填满。
             // res_columns里面有的指针已经被上一步读取填好，有的缺失仍是 nullptr。
             if (res_columns[pos]) // 空指针就代表缺失列，不往下插，因为缺的列要靠后面的默认表达式去补，
-                // 所以，additional_columns代表的是不缺的列，即如果当前列已有数据，就把它塞进临时的 Block additional_columns
+                // 所以，additional_columns 代表的是不缺的列，即如果当前列已有数据，就把它塞进临时的 Block additional_columns.
+                // 在我的场景下，是正在进行Merge的Map的子列 tagGroup.key ，而host由于缺失，不在res_columns中
                 additional_columns.insert({res_columns[pos], it->type, it->name});
         }
 
+
         // 构造评估默认值的DAG, 这里根据表元数据（包含 DEFAULT/MATERIALIZED）和已存在的列，生成一棵表达式 DAG，指明哪些缺失列要怎么计算。
         auto dag = DB::evaluateMissingDefaults(
-            additional_columns, full_requested_columns,
+            additional_columns,  //
+            full_requested_columns, // 请求的所有的列的基列，这里是host 和 tagGroup1两列
             storage_snapshot->metadata->getColumns(),
             data_part_info_for_read->getContext());
 
@@ -203,9 +208,12 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
                 std::move(*dag),
                 ExpressionActionsSettings::fromSettings(data_part_info_for_read->getContext()->getSettingsRef()));
             /**
-             * actions->execute(additional_columns); 会“把计算结果放进这个 Block”，既包括：
+             * actions->execute(additional_columns); 会“把计算结果放进这个 Block additional_columns中”，既包括：
              *  对原本缺失的列：按照默认表达式新建出一列，加到 additional_columns 里（原来没有这一列，现在有了）。
              *  对已有的列：如果表达式图里定义了对它的计算（比如 MATERIALIZED/DEFAULT 依赖），也会在同一个 Block 里覆盖/更新对应列的数据。
+             *
+             *     - host 有 DEFAULT，会补一根常量列。
+             *     - tagGroup1 在 additional_columns 中不存在且无 DEFAULT，因此用类型默认值补一根空 Map，内部键/值子列默认构造成 ColumnNothing。
              */
 
             actions->execute(additional_columns);
