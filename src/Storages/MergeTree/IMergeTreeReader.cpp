@@ -139,7 +139,12 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
 }
 
 /**
- * 这里的res_columns就是请求的列，比如，当前的VerticalMergeStage正在请求的例，在我们的例子中，
+ * 这里的res_columns就是请求的列，比如，当前的VerticalMergeStage正在请求的例
+ * Columns & res_columns 与 original_requested_columns(构造IMergeTreeReader的时候传入的) 对齐，
+ * 代表调用方本次请求的列集：有可能是基列，也可能是子列。
+ * 它和 original_requested_columns 一一对应，位置相同；已读出的列是非空指针，缺失的列为 nullptr，后续默认值计算会据此填满。
+ *
+ * 在我们的例子中，
  * 这个列是Map<LowCardinality<String>,String>，而不是缺失的那5个非LowCardinality列，但是方法evaluateMissingDefaults
  * 的触发确实是有那5列缺失触发的
  * @param additional_columns
@@ -167,15 +172,25 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
         // 遍历构造IMergeTreeReader的时候传入的参数列 original_requested_columns
         for (size_t pos = 0; pos < num_columns; ++pos, ++it)
         {
+            // 找到对应的存储列。如果是子列，则映射到对应的表结构的基列
             auto name_in_storage = it->getNameInStorage();
 
+            // 构建 full_requested_columns， 把对应的子列提升为对应的存储列(基列)级别
+            // 如果 full_requested_columns_set中不存在name_in_storage， 则执行插入
+            // NameSet full_requested_columns_set; 和 NamesAndTypesList full_requested_columns;。前者用来去重存储列名，后者存对应列名+类型
             if (full_requested_columns_set.emplace(name_in_storage).second)
                 full_requested_columns.emplace_back(name_in_storage, it->getTypeInStorage());
 
-            if (res_columns[pos])
+            // res_columns 是与original_requested_columns同样位置对齐的 Columns 数组，
+            // Columns & res_columns 与 original_requested_columns 对齐，代表调用方本次请求的列集：有可能是基列，也可能是子列。
+            // 它和 original_requested_columns 一一对应，位置相同；已读出的列是非空指针，缺失的列为 nullptr，后续默认值计算会据此填满。
+            // res_columns里面有的指针已经被上一步读取填好，有的缺失仍是 nullptr。
+            if (res_columns[pos]) // 空指针就代表缺失列，不往下插，因为缺的列要靠后面的默认表达式去补，
+                // 所以，additional_columns代表的是不缺的列，即如果当前列已有数据，就把它塞进临时的 Block additional_columns
                 additional_columns.insert({res_columns[pos], it->type, it->name});
         }
 
+        // 构造评估默认值的DAG, 这里根据表元数据（包含 DEFAULT/MATERIALIZED）和已存在的列，生成一棵表达式 DAG，指明哪些缺失列要怎么计算。
         auto dag = DB::evaluateMissingDefaults(
             additional_columns, full_requested_columns,
             storage_snapshot->metadata->getColumns(),
@@ -187,20 +202,35 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
             auto actions = std::make_shared<ExpressionActions>(
                 std::move(*dag),
                 ExpressionActionsSettings::fromSettings(data_part_info_for_read->getContext()->getSettingsRef()));
+            /**
+             * actions->execute(additional_columns); 会“把计算结果放进这个 Block”，既包括：
+             *  对原本缺失的列：按照默认表达式新建出一列，加到 additional_columns 里（原来没有这一列，现在有了）。
+             *  对已有的列：如果表达式图里定义了对它的计算（比如 MATERIALIZED/DEFAULT 依赖），也会在同一个 Block 里覆盖/更新对应列的数据。
+             */
+
             actions->execute(additional_columns);
         }
 
         /// Move columns from block.
+        // 再次遍历原始的请求列，
+        // 这里的循环负责把默认值计算后的结果从 additional_columns 拿出来，按调用方请求的粒度（可能是基列，也可能是子列）填回 res_columns
         it = original_requested_columns.begin();
         for (size_t pos = 0; pos < num_columns; ++pos, ++it)
         {
-            auto name_in_storage = it->getNameInStorage();
+            // 如果请求的是子列，这里取的是它所属的存储列名；如果请求的是基列，就是自身列名。
+            auto name_in_storage = it->getNameInStorage(); // 获取对应基列的列名
+            // 先拿到对应存储列在 additional_columns 里的完整列数据指针，放到结果槽位。
+            // 此时 res_columns[pos] 持有的是“基列”的完整数据。
             res_columns[pos] = additional_columns.getByName(name_in_storage).column;
 
-            if (it->isSubcolumn())
+            // 若原请求是子列而不是基列，就还要从刚取出的完整基列里切出子列
+            if (it->isSubcolumn()) // 如果当前的这个请求列是子列
             {
-                const auto & type_in_storage = it->getTypeInStorage();
+                // 拿到基列的数据类型对象，用它来解析子列
+                const auto & type_in_storage = it->getTypeInStorage(); // 获取对应的基列的列类型
                 // 在这里报错了
+                // 这里，从完整列(res_columns[pos])中提取出对应的子列数据，替换掉 res_columns[pos]。
+                // 这样最终返回给上层的就是用户请求的那一列形状，而不是整个基列
                 res_columns[pos] = type_in_storage->getSubcolumn(it->getSubcolumnName(), res_columns[pos]);
             }
         }

@@ -16,6 +16,12 @@ class WriteBuffer;
   */
 struct ColumnWithTypeAndName
 {
+    /**
+     * ColumnPtr column 指向这列的实际数据（一个 IColumn 派生对象）。它可以有两种状态：
+            非空：持有这一列的具体数据块。
+            空指针：只表示“列头”（有类型和名字，用于描述/占位），还没有装载数据。
+       type 说明数据类型，name 是列名或临时名。
+     */
     ColumnPtr column;
     DataTypePtr type;
     String name;

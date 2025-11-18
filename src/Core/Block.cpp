@@ -186,7 +186,12 @@ void Block::insert(size_t position, ColumnWithTypeAndName elem)
     data.emplace(data.begin() + position, std::move(elem));
 }
 
-
+/**
+ * 往 Block 这个容器里追加一列（ColumnWithTypeAndName），包含三样东西：列名、列类型、列数据指针。
+ * 它做的是“把这个列对象放进 Block 的内部存储”，不是仅仅登记元数据，也不是拷贝一份原数据；实现里直接 data.emplace_back(std::move(elem))。
+ * 同时会在 index_by_name 里注册列名，若重名则校验结构一致，否则报错。
+ * @param elem
+ */
 void Block::insert(ColumnWithTypeAndName elem)
 {
     if (elem.name.empty())
