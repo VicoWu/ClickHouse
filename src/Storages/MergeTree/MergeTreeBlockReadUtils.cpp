@@ -31,14 +31,15 @@ namespace
 /// searching all required physical columns recursively. Return true if found at
 /// least one existing (physical) column in part.
 bool injectRequiredColumnsRecursively(
-    const String & column_name,
-    const StorageSnapshotPtr & storage_snapshot,
+    const String & column_name, // 当前的Merge所请求的某一列
+    const StorageSnapshotPtr & storage_snapshot, // 表结构快照，用来查询列定义及 DEFAULT/MATERIALIZED 表达式
     const AlterConversionsPtr & alter_conversions,
-    const IMergeTreeDataPartInfoForReader & data_part_info_for_reader,
-    const GetColumnsOptions & options,
-    Names & columns,
+    const IMergeTreeDataPartInfoForReader & data_part_info_for_reader, // 当前读取的 part 信息（含 getColumns()，判定这个 part 是否有某列或某子列）。
+    const GetColumnsOptions & options, // 指定查列时要包含物理列/虚拟列/子列等。
+    Names & columns, // 本轮merge/select所请求的列集合
     NameSet & required_columns,
-    NameSet & injected_columns)
+    NameSet & injected_columns // 在上层循环调用的时候，不断将需要注入的列存进来
+    )
 {
     /// This is needed to prevent stack overflow in case of cyclic defaults or
     /// huge AST which for some reason was not validated on parsing/interpreter
@@ -46,7 +47,7 @@ bool injectRequiredColumnsRecursively(
     checkStackSize();
 
     auto column_in_storage = storage_snapshot->tryGetColumn(options, column_name);
-    if (column_in_storage)
+    if (column_in_storage) //  这个column在表定义中存在
     {
         auto column_name_in_part = column_in_storage->getNameInStorage();
         if (alter_conversions && alter_conversions->isColumnRenamed(column_name_in_part))
@@ -54,7 +55,7 @@ bool injectRequiredColumnsRecursively(
 
         auto column_in_part = data_part_info_for_reader.getColumns().tryGetByName(column_name_in_part);
 
-        if (column_in_part
+        if (column_in_part // 如果这个column在part中存在 并且 (ezheg column不是subcolumn)
             && (!column_in_storage->isSubcolumn()
                 || column_in_part->type->tryGetSubcolumnType(column_in_storage->getSubcolumnName())))
         {
@@ -68,24 +69,26 @@ bool injectRequiredColumnsRecursively(
             return true;
         }
     }
-
+    //如果这个column在表中不存在，或者在表中存在，但是在part中不存在，那么往下执行
     /// Column doesn't have default value and don't exist in part
     /// don't need to add to required set.
     const auto column_default = storage_snapshot->metadata->getColumns().getDefault(column_name);
-    if (!column_default)
+    if (!column_default) // 如果没有默认表达式，那么就无需注入进来
         return false;
 
     /// collect identifiers required for evaluation
     IdentifierNameSet identifiers;
+    // 收集默认值表达式中的Identifier
     column_default->expression->collectIdentifierNames(identifiers);
 
     bool result = false;
+    // 对于默认值表达式中的identifier
     for (const auto & identifier : identifiers)
         result |= injectRequiredColumnsRecursively(
             identifier, storage_snapshot, alter_conversions, data_part_info_for_reader,
             options, columns, required_columns, injected_columns);
 
-    return result;
+    return result; // 只要有一个是true，就返回true。当所有都是false的时候返回false
 }
 
 }
@@ -94,8 +97,13 @@ NameSet injectRequiredColumns(
     const IMergeTreeDataPartInfoForReader & data_part_info_for_reader,
     const StorageSnapshotPtr & storage_snapshot,
     bool with_subcolumns,
-    Names & columns)
+    Names & columns //  columns 是上层给出的“本轮需要的列名单”（在你的例子里一开始只有 tagGroup1.values）
+    )
 {
+    /**
+     * 这一行是用 columns 里当前已有的列名初始化集合，所以会把列表里的内容拷贝进去（不是空集）。
+     * NameSet 构造函数接受两个迭代器，std::begin(columns) 到 std::end(columns) 之间的元素都会被插入，起到“已经被请求的列”基线集合的作用。
+     */
     NameSet required_columns{std::begin(columns), std::end(columns)};
     NameSet injected_columns;
 
@@ -109,12 +117,20 @@ NameSet injectRequiredColumns(
         .withVirtuals()
         .withSubcolumns(with_subcolumns);
 
+    /**
+     *  逐个把初始需要进行merge的column喂给 injectRequiredColumnsRecursively，在Vertical Merge的场景下，这个column只有tagGroup1.value
+     */
     for (size_t i = 0; i < columns.size(); ++i)
     {
         /// We are going to fetch physical columns and system columns first
         if (!storage_snapshot->tryGetColumn(options, columns[i]))
             throw Exception(ErrorCodes::NO_SUCH_COLUMN_IN_TABLE, "There is no column or subcolumn {} in table", columns[i]);
 
+        /**
+         * 会去 storage_snapshot 查看列定义，再看这个 part 是否包含对应的物理列。如果列缺失但在表定义里有 DEFAULT/MATERIALIZED，
+         * 就继续递归它 default 表达式依赖的列，把这些依赖列都塞进 columns，同时记录到 injected_columns。
+         * 只要在上层的for循环中有一次injectRequiredColumnsRecursively返回true，那么have_at_least_one_physical_column就返回true
+         */
         have_at_least_one_physical_column |= injectRequiredColumnsRecursively(
             columns[i], storage_snapshot, alter_conversions,
             data_part_info_for_reader, options, columns, required_columns, injected_columns);
@@ -126,14 +142,20 @@ NameSet injectRequiredColumns(
         */
     if (!have_at_least_one_physical_column)
     {
+        /**
+         * 虽然当前这个 Merge 阶段并没有直接请求它，但表结构中 host 有 DEFAULT ''，而这个 part 上完全没有 host 的物理数据，
+         * 所以只有靠 “补列” 才能在后面 evaluateMissingDefaults 阶段算出默认值。
+         * injectRequiredColumns 在扫描列定义时发现 host 符合“缺物理列但有 default”的条件，
+         * 就把 host 这个名字插入到 columns（以及返回值 injected_columns）里
+         */
         auto available_columns = storage_snapshot->metadata->getColumns().get(options);
         const auto minimum_size_column_name = data_part_info_for_reader.getColumnNameWithMinimumCompressedSize(available_columns);
         columns.push_back(minimum_size_column_name);
         /// correctly report added column
-        injected_columns.insert(columns.back());
+        injected_columns.insert(columns.back()); //把MinimumCompressedSize的column添加到columns中，也添加到injected_columns中
     }
 
-    return injected_columns;
+    return injected_columns; // injected_columns中包含的就是新注入的这一列，而columns也被修改了，新注入的这一列也被添加进来了
 }
 
 MergeTreeBlockSizePredictor::MergeTreeBlockSizePredictor(

@@ -115,6 +115,9 @@ MergeTreeSequentialSource::MergeTreeSequentialSource(
     /// is only used in background merges.
     addTotalRowsApprox(data_part->rows_count);
 
+    /**
+     * 搜索 NameSet injectRequiredColumns(
+     */
     /// Add columns because we don't want to read empty blocks
     injectRequiredColumns(
         LoadedMergeTreeDataPartInfoForReader(data_part, alter_conversions),
@@ -241,7 +244,7 @@ try
             reader->performRequiredConversions(columns);
 
             if (should_evaluate_missing_defaults)
-                reader->evaluateMissingDefaults({}, columns);
+                reader->evaluateMissingDefaults({}, columns); // 调用的时候，columns包含了两列，host和tagGroup1.values
 
             /// Reorder columns and fill result block.
             size_t num_columns = sample.size();

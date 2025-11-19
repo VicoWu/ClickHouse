@@ -114,6 +114,11 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
 {
     try
     {
+        /**
+         * requested_columns
+         * 新增的 host（基列，有 DEFAULT），res_columns 对应位置是 nullptr，因为 part 里没这列。
+         * 子列 tagGroup1.values（Map 的 value），res_columns 对应位置是已读到的子列数据指针。
+         */
         NamesAndTypesList available_columns(columns_to_read.begin(), columns_to_read.end());
         DB::fillMissingColumns(
             res_columns, // 带出返回值
@@ -122,7 +127,10 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
             Nested::convertToSubcolumns(available_columns), // part中实际的column
             partially_read_columns,
             storage_snapshot->metadata);
+        // should_eval_defaults=true, cols=[host=null;tagGroup1.values(values)=set], partially_read=[]
         // 只要res_columns中有任何一个Column是nullptr，那么 should_evaluate_missing_defaults = true
+        // 这里可以看到，  res_columns的size就是请求的列的数量，但是有的位置会有nullptr
+        //
         should_evaluate_missing_defaults = std::any_of(
             res_columns.begin(), res_columns.end(), [](const auto & column) { return column == nullptr; });
     }
@@ -141,7 +149,7 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
 /**
  * 新增的 host 列在该 part 中不存在，需要填 DEFAULT，这一步把 “补默认值” 打开了，因此调用 IMergeTreeReader::evaluateMissingDefaults。
  * 但是在IMergeTreeReader::evaluateMissingDefaults中抛异常的确实另外的列tagGroup1
- * 这里的res_columns就是请求的列，比如，当前的VerticalMergeStage正在请求的例，在这里，包含 host和tagGroup1.key两个列，其中tagGroup1.key是子列
+ * 这里的res_columns就是请求的列，比如，当前的VerticalMergeStage正在请求的例，在这里，包含 host和tagGroup1.value两个列，其中tagGroup1.value是子列
  * Columns & res_columns 与 original_requested_columns(构造IMergeTreeReader的时候传入的) 对齐，由于 host缺失，因此res_columns中它的对应位置是nullptr
  * 代表调用方本次请求的列集：有可能是基列，也可能是子列。
  * 它和 original_requested_columns 一一对应，位置相同；已读出的列是非空指针，缺失的列为 nullptr，后续默认值计算会据此填满。
