@@ -139,7 +139,7 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
 }
 
 /**
- * 新增的 host 列在该 part 中不存在，需要填 DEFAULT，这一步把 “补默认值” 打开了，因此调用IMergeTreeReader::evaluateMissingDefaults。
+ * 新增的 host 列在该 part 中不存在，需要填 DEFAULT，这一步把 “补默认值” 打开了，因此调用 IMergeTreeReader::evaluateMissingDefaults。
  * 但是在IMergeTreeReader::evaluateMissingDefaults中抛异常的确实另外的列tagGroup1
  * 这里的res_columns就是请求的列，比如，当前的VerticalMergeStage正在请求的例，在这里，包含 host和tagGroup1.key两个列，其中tagGroup1.key是子列
  * Columns & res_columns 与 original_requested_columns(构造IMergeTreeReader的时候传入的) 对齐，由于 host缺失，因此res_columns中它的对应位置是nullptr
@@ -187,7 +187,7 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
             // Columns & res_columns 与 original_requested_columns 对齐，代表调用方本次请求的列集：有可能是基列，也可能是子列。
             // 它和 original_requested_columns 一一对应，位置相同；已读出的列是非空指针，缺失的列为 nullptr，后续默认值计算会据此填满。
             // res_columns里面有的指针已经被上一步读取填好，有的缺失仍是 nullptr。
-            if (res_columns[pos]) // 空指针就代表缺失列，不往下插，因为缺的列要靠后面的默认表达式去补，
+            if (res_columns[pos]) // 空指针就代表缺失列，不往下插，因为缺的列要靠后面的默认表达式去补
                 // 所以，additional_columns 代表的是不缺的列，即如果当前列已有数据，就把它塞进临时的 Block additional_columns.
                 // 在我的场景下，是正在进行Merge的Map的子列 tagGroup.key ，而host由于缺失，不在res_columns中
                 additional_columns.insert({res_columns[pos], it->type, it->name});
@@ -234,6 +234,15 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
             // 若原请求是子列而不是基列，就还要从刚取出的完整基列里切出子列
             if (it->isSubcolumn()) // 如果当前的这个请求列是子列
             {
+                /**
+                 *  LOG_INFO(getLogger("VMTrace"),
+                    "IMergeTreeReader::evaluateMissingDefaults(getSubcolumn): table='{}', part='{}', base='{}', sub='{}', base_type='{}', col_kind='{}'",
+                    table, where,
+                    name_in_storage,   // tagGroup1
+                    it->getSubcolumnName(), // values
+                    it->getTypeInStorage()->getName(), // Map(LowCardinality(String), String)
+                    res_columns[pos] ? res_columns[pos]->getName() : String("nullptr")); // Map(Nothing, Nothing)
+                 */
                 // 拿到基列的数据类型对象，用它来解析子列
                 const auto & type_in_storage = it->getTypeInStorage(); // 获取对应的基列的列类型
                 // 在这里报错了
