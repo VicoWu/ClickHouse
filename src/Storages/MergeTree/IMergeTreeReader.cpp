@@ -122,7 +122,7 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
         NamesAndTypesList available_columns(columns_to_read.begin(), columns_to_read.end());
         DB::fillMissingColumns(
             res_columns, // 带出返回值
-            num_rows, // 行号
+            num_rows, // 总行数
             Nested::convertToSubcolumns(requested_columns), // 请求的列
             Nested::convertToSubcolumns(available_columns), // part中实际的column
             partially_read_columns,
@@ -130,7 +130,6 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
         // should_eval_defaults=true, cols=[host=null;tagGroup1.values(values)=set], partially_read=[]
         // 只要res_columns中有任何一个Column是nullptr，那么 should_evaluate_missing_defaults = true
         // 这里可以看到，  res_columns的size就是请求的列的数量，但是有的位置会有nullptr
-        //
         should_evaluate_missing_defaults = std::any_of(
             res_columns.begin(), res_columns.end(), [](const auto & column) { return column == nullptr; });
     }
@@ -157,7 +156,7 @@ void IMergeTreeReader::fillMissingColumns(Columns & res_columns, bool & should_e
  * 在我们的例子中，
  * 这个列是Map<LowCardinality<String>,String>，而不是缺失的那5个非LowCardinality列，但是方法evaluateMissingDefaults
  * 的触发确实是有那5列缺失触发的
- * @param additional_columns
+ * @param additional_columns 在Vertical Merge的场景下，additional_columns是{}
  * @param res_columns
  */
 void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns & res_columns) const
@@ -179,7 +178,7 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
         /// TODO: rewrite with columns interface. It will be possible after changes in ExpressionActions.
 
         auto it = original_requested_columns.begin();
-        // 遍历构造IMergeTreeReader的时候传入的参数列 original_requested_columns
+        // 遍历构造IMergeTreeReader的时候传入的参数列 original_requested_columns，这里是 [host, tagGroup1.values]
         for (size_t pos = 0; pos < num_columns; ++pos, ++it)
         {
             // 找到对应的存储列。如果是子列，则映射到对应的表结构的基列
@@ -200,6 +199,12 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
                 // 在我的场景下，是正在进行Merge的Map的子列 tagGroup.key ，而host由于缺失，不在res_columns中
                 additional_columns.insert({res_columns[pos], it->type, it->name});
         }
+        /**
+         * requested_full=[host:String, tagGroup1:Map(LowCardinality(String), String)],
+         * original_requested=[host:String, tagGroup1.values:Array(String)],
+         * res_columns=[host(storage='host'):nullptr, tagGroup1.values(storage='tagGroup1'):Array(String)],
+         * additional_block=[tagGroup1.values:Array(String)]
+         */
 
 
         // 构造评估默认值的DAG, 这里根据表元数据（包含 DEFAULT/MATERIALIZED）和已存在的列，生成一棵表达式 DAG，指明哪些缺失列要怎么计算。
@@ -217,15 +222,21 @@ void IMergeTreeReader::evaluateMissingDefaults(Block additional_columns, Columns
                 ExpressionActionsSettings::fromSettings(data_part_info_for_read->getContext()->getSettingsRef()));
             /**
              * actions->execute(additional_columns); 会“把计算结果放进这个 Block additional_columns中”，既包括：
-             *  对原本缺失的列：按照默认表达式新建出一列，加到 additional_columns 里（原来没有这一列，现在有了）。
-             *  对已有的列：如果表达式图里定义了对它的计算（比如 MATERIALIZED/DEFAULT 依赖），也会在同一个 Block 里覆盖/更新对应列的数据。
+             *  对原本缺失的列(host)：按照默认表达式新建出一列，加到 additional_columns 里（原来没有这一列，现在有了）。
+             *  对已有的列(tagGroup1)：如果表达式图里定义了对它的计算（比如 MATERIALIZED/DEFAULT 依赖），也会在同一个 Block 里覆盖/更新对应列的数据。
              *
              *     - host 有 DEFAULT，会补一根常量列。
              *     - tagGroup1 在 additional_columns 中不存在且无 DEFAULT，因此用类型默认值补一根空 Map，内部键/值子列默认构造成 ColumnNothing。
              */
 
             actions->execute(additional_columns);
+            //
         }
+        /**
+         * 这里执行完，Map对应的类型就已经是Map(Nothing, Nothing)了
+         * additional_block=[host:String, tagGroup1:Map(Nothing, Nothing), tagGroup1.values:Array(String)]
+         */
+
 
         /// Move columns from block.
         // 再次遍历原始的请求列，

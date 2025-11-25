@@ -49,13 +49,15 @@ bool injectRequiredColumnsRecursively(
     auto column_in_storage = storage_snapshot->tryGetColumn(options, column_name);
     if (column_in_storage) //  这个column在表定义中存在
     {
+        // 获取这一列在表中的名字
         auto column_name_in_part = column_in_storage->getNameInStorage();
-        if (alter_conversions && alter_conversions->isColumnRenamed(column_name_in_part))
+        if (alter_conversions && alter_conversions->isColumnRenamed(column_name_in_part)) // 如果这个column曾经被rename过，那么就要使用在part中的名字(part中的名字在alter的时候没有被修改)
             column_name_in_part = alter_conversions->getColumnOldName(column_name_in_part);
 
+        // 获取这个column在part中的信息
         auto column_in_part = data_part_info_for_reader.getColumns().tryGetByName(column_name_in_part);
 
-        if (column_in_part // 如果这个column在part中存在 并且 (ezheg column不是subcolumn)
+        if (column_in_part // 如果这个column在part中存在 并且 (column不是subcolumn)
             && (!column_in_storage->isSubcolumn()
                 || column_in_part->type->tryGetSubcolumnType(column_in_storage->getSubcolumnName())))
         {
@@ -69,20 +71,22 @@ bool injectRequiredColumnsRecursively(
             return true;
         }
     }
-    //如果这个column在表中不存在，或者在表中存在，但是在part中不存在，那么往下执行
+    //如果这个column在表中不存在，或者在表中存在，但是在part中不存在，那么就寄希望于default值或者default表达式来计算它的值
     /// Column doesn't have default value and don't exist in part
     /// don't need to add to required set.
+    // 获取这个column的默认值或者默认值表达式
     const auto column_default = storage_snapshot->metadata->getColumns().getDefault(column_name);
-    if (!column_default) // 如果没有默认表达式，那么就无需注入进来
+    if (!column_default) // 如果这一列缺失，并且没有默认值或者默认值表达式，那么就无需注入进来
         return false;
 
+    // 这一列缺失，并且有默认值和默认值表达式
     /// collect identifiers required for evaluation
     IdentifierNameSet identifiers;
     // 收集默认值表达式中的Identifier
     column_default->expression->collectIdentifierNames(identifiers);
 
     bool result = false;
-    // 对于默认值表达式中的identifier
+    // 对于默认值表达式中的identifier，只要有一个identifier物理存在(在table和part中都存在)，就返回true，如果所有的identifer都不存在，才返回false
     for (const auto & identifier : identifiers)
         result |= injectRequiredColumnsRecursively(
             identifier, storage_snapshot, alter_conversions, data_part_info_for_reader,
@@ -115,7 +119,7 @@ NameSet injectRequiredColumns(
     auto options = GetColumnsOptions(GetColumnsOptions::AllPhysical)
         .withExtendedObjects()
         .withVirtuals()
-        .withSubcolumns(with_subcolumns);
+        .withSubcolumns(with_subcolumns); // 这里with_subcolumns 是true，所以粒度会细到子列
 
     /**
      *  逐个把初始需要进行merge的column喂给 injectRequiredColumnsRecursively，在Vertical Merge的场景下，这个column只有tagGroup1.value

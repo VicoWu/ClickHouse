@@ -710,7 +710,7 @@ Pipe MergeTask::VerticalMergeStage::createPipeForReadingOneColumn(const String &
             *global_ctx->data,
             global_ctx->storage_snapshot,
             global_ctx->future_part->parts[part_num],
-            Names{column_name},
+            Names{column_name}, // 对于Vertical Merge，
             /*mark_ranges=*/ {},
             global_ctx->input_rows_filtered,
             /*apply_deleted_mask=*/ true,

@@ -325,11 +325,11 @@ static String removeTupleElementsFromSubcolumn(String subcolumn_name, const Name
 }
 
 void fillMissingColumns(
-    Columns & res_columns,
-    size_t num_rows,
-    const NamesAndTypesList & requested_columns,
-    const NamesAndTypesList & available_columns,
-    const NameSet & partially_read_columns,
+    Columns & res_columns, // res_columns = [nullptr, ColumnArray(...)] ,包含了host和tagGroup1.valuel两列
+    size_t num_rows, // fillMissingColumns 用它来在需要时创建“默认列”的行数, 比如，一列没有默认值，并且也在part中缺失，那么需要按照行数去构造对应的占位符，并设置“类型默认值”
+    const NamesAndTypesList & requested_columns, // [host String, tagGroup1.values MapValueSubcolumn]，顺序和 res_columns 一一对应
+    const NamesAndTypesList & available_columns, // columns_to_read 由构造 IMergeTreeReader 时的 requested_columns 直接转换而来, 包含两项：host（虽然 part 里没有物理流，但仍按请求列记在 columns_to_read）以及 tagGroup1.values（真实从 part 读取的 Map value 子列）
+    const NameSet & partially_read_columns, // 在MergeTreeReaderWide::addStreams中被设置，主要是看这一列是否缺少stream
     StorageMetadataPtr metadata_snapshot)
 {
     size_t num_columns = requested_columns.size();
@@ -343,14 +343,15 @@ void fillMissingColumns(
     /// but a column of arrays of correct length.
 
     /// First, collect offset columns for all arrays in the block.
+    // 构造对应的stream_name和IColumn的映射关系
     auto offsets_columns = collectOffsetsColumns(available_columns, res_columns);
 
     /// Insert default values only for columns without default expressions.
-    auto requested_column = requested_columns.begin(); // 对于vertical merge，这里的requested_columns其实仅仅是当前正在进行merge的列，比如，当前的Map列
+    auto requested_column = requested_columns.begin(); // 对于vertical merge，这里的requested_columns其实仅仅是当前正在进行merge的列，比如，当前的host和tagGroup1.values
     for (size_t i = 0; i < num_columns; ++i, ++requested_column)
     {
         if (res_columns[i] && partially_read_columns.contains(requested_column->name))
-            res_columns[i] = nullptr; // 只要该列有missing stream，那么就先把res_columns[i]置为nullptr，但是这不是最终设置，后面还会
+            res_columns[i] = nullptr; // 只要该列不为空，并且有 missing stream，那么就先把res_columns[i]置为nullptr，但是这不是最终设置，后面会尝试进行类型默认值的推断
 
         /// Nothing to fill or default should be filled in evaluateMissingDefaults
         /**
@@ -359,20 +360,29 @@ void fillMissingColumns(
          *  目的：让 evaluateMissingDefaults 去按 DEFAULT 表达式计算，可能依赖其它列
          */
         if (res_columns[i] || hasDefault(metadata_snapshot, *requested_column))
-            continue; // 如果 res_columns[i] 不为空，或者，虽然为空，但是有default值，那么直接返回
-        // 执行到这里，说明 res_columns[i] 为空，并且目前没有default值，那么在方法内部“就地”补上类型默认值：
+            continue; // 如果 res_columns[i] 不为空(这一列在part中存在)，或者，虽然不存在，但是有default值，那么直接返回
+        // 执行到这里，说明 res_columns[i] 为空，并且目前没有default值，那么在方法内部“就地”补上类型默认值
+        // 所以，tagGroup1不会执行到这里（因为它对应的res_columns[i]不是空），host也不在这里(因为它有默认值，会在evaluateMissingDefault中进行默认值评估)
         std::vector<ColumnPtr> current_offsets;
         size_t num_dimensions = 0;
 
         const auto * array_type = typeid_cast<const DataTypeArray *>(requested_column->type.get());
         if (array_type && !offsets_columns.empty())
         {
+            //  获取数组的维度，即，这是几维数组，比如 一维数组的num_dimensions=1,二维数组的num_dimensions=2
             num_dimensions = getNumberOfDimensions(*array_type);
+            // current_offsets 的大小设置成这个array的dimension的大小
             current_offsets.resize(num_dimensions);
 
             auto serialization = IDataType::getSerialization(*requested_column);
+            /**
+             *  path 是 ISerialization::SubstreamPath ——一个描述“逻辑子流层级”的向量，比如 [{ArraySizes, level=0}, {TupleElement, name='values'}]，表示我们当前处理的是哪个嵌套/子列/维度。
+             *  stream_name 则是把 path 和列名拼接成实际的物理流名，也就是落盘的文件前缀（例如 tagGroup1.values.size0）。
+             *  换句话说，path 描述结构，stream_name 是最终用来查 .bin/.mrk 的字符串。
+             */
             serialization->enumerateStreams([&](const auto & subpath)
             {
+                // 遍历这个数组序列化下所有子流，筛选出只要 ArraySizes（即 *.size0/size1...）的流
                 if (subpath.empty() || subpath.back().type != ISerialization::Substream::ArraySizes)
                     return;
 
@@ -380,15 +390,18 @@ void fillMissingColumns(
                 /// It can happen if element of Array is Map.
                 if (level >= num_dimensions)
                     return;
-
+                // // 拼出真实的 stream 名
                 auto stream_name = ISerialization::getFileNameForStream(*requested_column, subpath);
                 auto it = offsets_columns.find(stream_name);
+                // 如果找到了，就把对应的 ColumnUInt64 指针放到 current_offsets[level]，level 由 ISerialization::getArrayLevel 给出。
                 if (it != offsets_columns.end())
-                    current_offsets[level] = it->second;
+                    current_offsets[level] = it->second; // 第level维的值设置为对应的ColumnPtr
             });
 
+            // 对于数组的每一个维度
             for (size_t j = 0; j < num_dimensions; ++j)
             {
+                //  如果多维数组里有某一层 offset 缺失，就把 current_offsets 缩短到那一层之前，避免使用不完整的 offsets。
                 if (!current_offsets[j])
                 {
                     current_offsets.resize(j);

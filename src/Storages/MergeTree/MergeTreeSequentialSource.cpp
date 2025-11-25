@@ -219,23 +219,29 @@ try
     const auto & header = getPort().getHeader();
     /// Part level is useful for next step for merging non-merge tree table
     bool add_part_level = storage.merging_params.mode != MergeTreeData::MergingParams::Ordinary;
+    // 当前 part（data_part）总共有多少 “mark”（稀疏索引点），用于 readRows 控制读取尾部
     size_t num_marks_in_part = data_part->getMarksCount();
-
+    // 如果当前读到的行数小于这个part的总行数，那么意味着还没有读完，继续读取
     if (!isCancelled() && current_row < data_part->rows_count)
     {
+        // 获取当前Mark对应的可读的数据行数
         size_t rows_to_read = data_part->index_granularity.getMarkRows(current_mark);
+        // 首个 mark 不需要“延续”，之后的 mark 需告知 Reader “接着读”，即如果current_mark=0，不存在接着读，而如果current_mark!=0，需要从前面读的位置接着读
         bool continue_reading = (current_mark != 0);
-
+        // IMergeTreeReader 给出的 header（NamesAndTypesList）；我的 case 中 sample 对应 [host String, tagGroup1.values Array(LowCardinality(String))]
         const auto & sample = reader->getColumns();
-        Columns columns(sample.size());
+        Columns columns(sample.size()); // 构造需要读取的Column的Vector，即为每个请求的列分配槽位（初始全 nullptr)，  std::vector<ColumnPtr>;
+        // 使用IMergeTreeReader从指定的part读取指定行数的数据, 从 part 读取真实数据，填进 columns。
+        // 由于host在part中不存在，这一步只把 tagGroup1.values 读出来，host 保持 nullptr；返回值 rows_read 等于实际读到的行数
         size_t rows_read = reader->readRows(current_mark, num_marks_in_part, continue_reading, rows_to_read, columns);
 
-        if (rows_read)
+        if (rows_read) // 如果的确读到了数据
         {
+            // 填充诸如 _part, _part_index 的虚拟列（查 storage_snapshot->virtual_columns）。
             fillBlockNumberColumns(columns, sample, data_part->info.min_block, current_row, rows_read);
             reader->fillVirtualColumns(columns, rows_read);
-
-            current_row += rows_read;
+            // 更新 current_row、current_mark：推进游标，下一轮知道从哪继续。
+            current_row += rows_read; // 更新读取的总行数
             current_mark += (rows_to_read == rows_read);
 
             bool should_evaluate_missing_defaults = false;
