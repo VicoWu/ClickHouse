@@ -9,7 +9,7 @@ private:
     friend class COW<IColumn>;
 
     virtual MutablePtr clone() const = 0;
-    virtual MutablePtr deepMutate() const { return shallowMutate(); }
+    virtual MutablePtr deepMutate() const { return shallowMutate(); } // 默认情况下，deepMutate()只是做shallowMutate就行，如果实在是有需要做深拷贝的，需要重写mutate()
 
 public:
     IColumn() = default;
@@ -25,34 +25,48 @@ public:
 using ColumnPtr = IColumn::Ptr;
 using MutableColumnPtr = IColumn::MutablePtr;
 
+/**
+ * ConcreteColumn -> COWHelper<IColumn, ConcreteColumn> -> IColumn -> COW<IColumn> -> boost::intrusive_ref_counter<Derived>
+ */
 class ConcreteColumn : public COWHelper<IColumn, ConcreteColumn>
 {
 private:
-    friend class COWHelper<IColumn, ConcreteColumn>;
+    /**
+     * template <typename Base, typename Derived>
+     *  class COWHelper : public Base
+     */
+    friend class COWHelper<IColumn, ConcreteColumn>; // 允许COWHelper访问自己的私有函数
 
     int data;
-    explicit ConcreteColumn(int data_) : data(data_) {}
-    ConcreteColumn(const ConcreteColumn &) = default;
+    explicit ConcreteColumn(int data_) : data(data_) {} // 禁止隐式类型转换
+    ConcreteColumn(const ConcreteColumn &) = default; // 默认的拷贝构造函数
 
 public:
     int get() const override { return data; }
     void set(int value) override { data = value; }
 };
 
+/**
+ * ColumnComposition -> COWHelper<IColumn, ConcreteColumn> -> IColumn -> COW<IColumn> -> boost::intrusive_ref_counter<IColumn>
+ */
 class ColumnComposition : public COWHelper<IColumn, ColumnComposition>
 {
 private:
     friend class COWHelper<IColumn, ColumnComposition>;
 
-    ConcreteColumn::WrappedPtr wrapped;
+    ConcreteColumn::WrappedPtr wrapped; // WrappedPtr定义在COW中的public变量？
 
     explicit ColumnComposition(int data) : wrapped(ConcreteColumn::create(data)) {}
     ColumnComposition(const ColumnComposition &) = default;
 
+    /**
+     * 重写了 deepMutate()，相对于shallowMutate()
+     */
     IColumn::MutablePtr deepMutate() const override
     {
         std::cerr << "Mutating\n";
-        auto res = shallowMutate();
+        auto res = shallowMutate(); // shallowMutate定义在COWHelper中
+
         res->wrapped = IColumn::mutate(std::move(res->wrapped).detach());
         return res;
     }

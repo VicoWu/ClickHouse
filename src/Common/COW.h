@@ -76,28 +76,35 @@ template <typename Derived>
 class COW : public boost::intrusive_ref_counter<Derived>
 {
 private:
+    /**
+     * 这也是一个const重载(而不是函数名重载)
+     * static_cast<Derived*>(this) 这种“指针向下转型”， 不会、也不可能调用 Derived 的构造函数，它只是在改 "你怎么看这个地址"
+     * @return
+     */
     Derived * derived() { return static_cast<Derived *>(this); }
     const Derived * derived() const { return static_cast<const Derived *>(this); }
 
+    // 定义两个类模板 mutable_ptr 和 immutable_ptr
 protected:
     template <typename T>
     class mutable_ptr : public boost::intrusive_ptr<T> /// NOLINT
     {
     private:
         using Base = boost::intrusive_ptr<T>;
-
+        // COW是immutable_ptr的friend，因此，可以通过COW::immutable_ptr来调用构造函数
         template <typename> friend class COW;
         template <typename, typename> friend class COWHelper;
 
+        // 显式构造函数，可以通过static_cast被调用
         explicit mutable_ptr(T * ptr) : Base(ptr) {}
 
     public:
         /// Copy: not possible.
-        mutable_ptr(const mutable_ptr &) = delete;
+        mutable_ptr(const mutable_ptr &) = delete; // 不允许有拷贝构造函数
 
         /// Move: ok.
-        mutable_ptr(mutable_ptr &&) = default; /// NOLINT
-        mutable_ptr & operator=(mutable_ptr &&) = default; /// NOLINT
+        mutable_ptr(mutable_ptr &&) = default; ///  允许有移动构造函数
+        mutable_ptr & operator=(mutable_ptr &&) = default; /// 允许移动赋值
 
         /// Initializing from temporary of compatible type.
         template <typename U>
@@ -112,28 +119,29 @@ public:
     using MutablePtr = mutable_ptr<Derived>;
 
 protected:
+    // 子类可以使用immutable_ptr和mutable_ptr，比如，在COWHelper中可以使用
     template <typename T>
     class immutable_ptr : public boost::intrusive_ptr<const T> /// NOLINT
     {
     private:
         using Base = boost::intrusive_ptr<const T>;
-
+        // COW是immutable_ptr的friend，因此，可以通过COW::immutable_ptr来调用构造函数
         template <typename> friend class COW;
         template <typename, typename> friend class COWHelper;
-
+        // explicit构造函数，可以通过static_cast被调用
         explicit immutable_ptr(const T * ptr) : Base(ptr) {}
 
     public:
         /// Copy from immutable ptr: ok.
-        immutable_ptr(const immutable_ptr &) = default;
+        immutable_ptr(const immutable_ptr &) = default; // 默认的赋值构造函数
         immutable_ptr & operator=(const immutable_ptr &) = default;
 
         template <typename U>
         immutable_ptr(const immutable_ptr<U> & other) : Base(other) {} /// NOLINT
 
         /// Move: ok.
-        immutable_ptr(immutable_ptr &&) = default; /// NOLINT
-        immutable_ptr & operator=(immutable_ptr &&) = default; /// NOLINT
+        immutable_ptr(immutable_ptr &&) = default; /// 默认的移动构造函数
+        immutable_ptr & operator=(immutable_ptr &&) = default; /// 移动赋值
 
         /// Initializing from temporary of compatible type.
         template <typename U>
@@ -145,7 +153,7 @@ protected:
 
         /// Copy from mutable ptr: not possible.
         template <typename U>
-        immutable_ptr(const mutable_ptr<U> &) = delete;
+        immutable_ptr(const mutable_ptr<U> &) = delete; // 不允许有从mutable_ptr到immutable_ptr的拷贝构造函数ctor
 
         immutable_ptr() = default;
 
@@ -160,30 +168,59 @@ public:
 
     template <typename T>
     static MutablePtr create(std::initializer_list<T> && arg) { return create(std::forward<std::initializer_list<T>>(arg)); }
+    /**
+     * const / 非 const 成员函数重载，而不是函数名重载
+     * 把derived()进行静态类型转换成 immutable_ptr<Derived>/ mutable_ptr<Derived>
+     *
+     * getPtr() 的 const / 非 const 重载并不是为了“返回不同类型”， 而是利用 constness 作为权限系统：
+     *  const 对象只能获得共享只读指针，
+     *  非 const 对象才能获得独占可写指针。
+     *  通过 CRTP 的 derived() 和指针包装类型的 explicit 构造，
+     *  ClickHouse 在类型系统层面强制了 COW 的不变式。
 
-    Ptr getPtr() const { return static_cast<Ptr>(derived()); }
-    MutablePtr getPtr() { return static_cast<MutablePtr>(derived()); }
+     * 编译器的调用规则是: 看调用点对象是不是 const
+     *          const COW& x → 只能调用 f() const
+     *          COW& x → 优先调用非 const 版本
+     *
+     * static_cast 不是“改内存”， 而是“请求一种合法的、编译期可决定的转换方式”。因此这里会调用Ptr/MutablePtr的构造函数
+     * 由于COW是Ptr和MutablePtr的friend，因此可以在这里调用到Ptr和MutablePtr的构造函数
+     *
+     *
+     * @return
+     */
+    Ptr getPtr() const { return static_cast<Ptr>(derived()); } // 这里调用 derived const(){}，返回 const Derived *
+    MutablePtr getPtr() { return static_cast<MutablePtr>(derived()); } // 这里调用 derived const(){}，返回 Derived *
 
 protected:
+    // 返回一个 mutable_ptr<Derived>，这个方法是一个protect方法，意味着只有子类能调用，比如COWHelper
+    // 这里的shallowMutate()不是进行修改的含义，而是准备进行修改，所以拷贝一份出来“供修改”
     MutablePtr shallowMutate() const
     {
+        // 这个use_count定义在boost::intrusive_ref_counter中
         if (this->use_count() > 1)
-            return derived()->clone();
+            return derived()->clone(); // CRTP的特性：基类根本不需要在意派生类是否有clone()方法，派生类自己负责实现clone()方法，如果没实现但是又调用了shallowMutate()，编译期间报错
         else
             return assumeMutable();
     }
 
 public:
+    // COW::mutate
+    // 可以看到，这里的mutate只是浅修改，是直接调用shallowMutate()
+    // 子类的IColumn::mutate()会为mutate“深度拷贝”出一个副本
     static MutablePtr mutate(Ptr ptr)
     {
         return ptr->shallowMutate();
     }
-
+    // COW::assumeMutable
     MutablePtr assumeMutable() const
     {
-        return const_cast<COW*>(this)->getPtr();
+        /**
+         * this 在 assumeMutable() const 里类型是：const COW*, const_cast<COW*>(this) 把它变成：COW*（去掉 const）
+         * 所以，这里调用的为 非const版本的getPtr()，返回一个 MutablePtr (mutable_ptr<Derived>)
+         */
+        return const_cast<COW*>(this)->getPtr(); // 返回一个 MutablePtr (mutable_ptr<Derived>)
     }
-
+    // COW::assumeMutableRef
     Derived & assumeMutableRef() const
     {
         return const_cast<Derived &>(*derived());
@@ -194,31 +231,62 @@ protected:
     template <typename T>
     class chameleon_ptr /// NOLINT
     {
+        /**
+         * chameleon_ptr 本质上更像一个 “默认共享只读句柄” , 但它提供非 const 的 get()/operator->/operator*，把你带到可写世界 ,
+         * 换句话说：它把“是否可写”绑定到你拿到的是 const 还是非 const 的 chameleon_ptr。
+         */
     private:
         immutable_ptr<T> value;
 
     public:
         template <typename... Args>
+        /**
+         * 把参数原样转发给value
+         * 这就是“完美转发”（forwarding constructor），
+         * 你给 chameleon_ptr 什么参数，它就原样转发给 value（内部 immutable_ptr）去构造
+         * @tparam Args
+         * @param args
+         */
         chameleon_ptr(Args &&... args) : value(std::forward<Args>(args)...) {} /// NOLINT
-
+        /**
+         * 完美转发
+         * @tparam U
+         * @param arg
+         */
         template <typename U>
         chameleon_ptr(std::initializer_list<U> && arg) : value(std::forward<std::initializer_list<U>>(arg)) {}
 
+        // 如 const chameleon_ptr，就只能拿到只读子对象
+        // value 的类型是 immutable_ptr<T>，本质上是 intrusive_ptr<const T>，因此只能拿到 const T*。
         const T * get() const { return value.get(); }
+
+        // 非 const 版本：返回 T*
+        // value 的类型是 immutable_ptr<T>， 这里调用的是  COW::assumeMutableRef,
+        // 因为 immutable_ptr 重载了 operator -> (immutable_ptr继承了boost::intrusive_ptr，默认就重载了operator -> )，因此，这里其实是调用
+        // 因此这里是 T -> assumeMutableRef()， 而在继承体系里面 T == Derived == IColumn / ColumnVector / ...
+        // {
+        //   const T* p =  value.operator->();
+        //   p->assumeMutableRef();
+        // }
         T * get() { return &value->assumeMutableRef(); }
 
-        const T * operator->() const { return get(); }
-        T * operator->() { return get(); }
+        // 这里重载了操作符->
+        const T * operator->() const { return get(); } // const版本
+        T * operator->() { return get(); }  // 非const版本
 
+        // 重载了操作符*
         const T & operator*() const { return *value; }
+        // 获取一个可读写的T，这时候，已经通过调用COW::assumeMutableRef拷贝了一份出来，因此是可读写
         T & operator*() { return value->assumeMutableRef(); }
 
+        // 重载了操作符&
         operator const immutable_ptr<T> & () const { return value; } /// NOLINT
         operator immutable_ptr<T> & () { return value; } /// NOLINT
 
         /// Get internal immutable ptr. Does not change internal use counter.
         immutable_ptr<T> detach() && { return std::move(value); }
 
+        // 禁止隐式转换，必须显式转换，转换为bool的逻辑是: 是否为空指针
         explicit operator bool() const { return value != nullptr; }
         bool operator! () const { return value == nullptr; }
 
@@ -240,7 +308,7 @@ public:
       *
       * See example in "cow_compositions.cpp".
       */
-    using WrappedPtr = chameleon_ptr<Derived>;
+    using WrappedPtr = chameleon_ptr<Derived>; // 这个WrappedPtr是public的
 };
 
 
@@ -268,6 +336,7 @@ public:
   *     boost::intrusive_ref_counter<IColumn>
   *
   * See example in "cow_columns.cpp".
+  * // 所有的实体Column，比如ColumnString，ColumnVector<UInt32>都是直接继承了COWHelper
   */
 template <typename Base, typename Derived>
 class COWHelper : public Base
@@ -277,17 +346,33 @@ private:
     const Derived * derived() const { return static_cast<const Derived *>(this); }
 
 public:
-    using Ptr = typename Base::template immutable_ptr<Derived>;
-    using MutablePtr = typename Base::template mutable_ptr<Derived>;
-
+    /**
+     * 这里，Base只是一个模板参数,因此前面必须添加typename告诉编译器: Base::immutable_ptr是一个类型，而不是一个变量
+     * 模板不关心“你是谁”，只关心“你有没有我要的东西”。
+     * 这里的代码这么写，必须要求Base中含有immutable_ptr和mutable_ptr，即遵循接口契约（interface contract）
+     * 在当前的代码中，COW是满足要求的: 含有 immutable_ptr和mutable_ptr,因此如果编译的时候Base是COW，那么就可以编译通过
+     * 由于编译器不知道immutable_ptr是一个类模板，因此，必须添加Base::template
+     */
+    using Ptr = typename Base::template immutable_ptr<Derived>; // immutable_ptr定义在COW中
+    using MutablePtr = typename Base::template mutable_ptr<Derived>; // mutable_ptr定义在COW中
+    // 直接给ColumnVector， ColumnString使用的静态方法，可以参考 cow_columns.cpp
+    // 不是 virtual，也不需要对象实例；只是名字查找时，派生类作用域也能找到基类的静态成员
     template <typename... Args>
     static MutablePtr create(Args &&... args) { return MutablePtr(new Derived(std::forward<Args>(args)...)); }
 
     template <typename T>
     static MutablePtr create(std::initializer_list<T> && arg) { return MutablePtr(new Derived(std::forward<std::initializer_list<T>>(arg))); }
-
+    /**
+     * COWHelper::clone()，实际运行时继承了virtual IColumn::clone() = 0 方法
+     * 写时拷贝, 由于Base是一个模板类，因此需要添加typename声明
+     * 这里clone()是在Base(IColumn)里面定义的virtual函数，具体的clone() 实现这里放在COWHelper里面
+     * 在
+     * @return
+     */
     typename Base::MutablePtr clone() const override { return typename Base::MutablePtr(new Derived(*derived())); }
 
 protected:
+    // COWHelper中的shallowMutate()会调用父类COW的COW::shallowMutate()
+    // 这里的Derived是 ConcreteColumn
     MutablePtr shallowMutate() const { return MutablePtr(static_cast<Derived *>(Base::shallowMutate().get())); }
 };

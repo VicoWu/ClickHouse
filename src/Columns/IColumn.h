@@ -53,12 +53,18 @@ using EqualRanges = std::vector<EqualRange>;
 class IColumn : public COW<IColumn>
 {
 private:
-    friend class COW<IColumn>;
+    friend class COW<IColumn>; // 父类COW可以访问子类IColumn
 
     /// Creates the same column with the same data.
     /// This is internal method to use from COW.
     /// It performs shallow copy with copy-ctor and not useful from outside.
     /// If you want to copy column for modification, look at 'mutate' method.
+    /**
+     * 只给 COW 机制用的、返回真实派生类型副本的虚函数，因此子类比如COWHelper是可以重载这个函数的，具体的实现也的确放在COWHelper中
+     * clone()定义成private的用意是:  clone() 只能被 COW<IColumn> 调用， 任何外部代码都不允许直接 clone 一个 Column
+     * 并且clone()方法是一个const方法，表示它不修改源对象
+     * @return
+     */
     [[nodiscard]] virtual MutablePtr clone() const = 0;
 
 public:
@@ -513,10 +519,12 @@ public:
     /// Shallow: doesn't do recursive calls; don't do call for itself.
 
     using MutableColumnCallback = std::function<void(WrappedPtr &)>;
+    // 这是一个virtual方法,非 const的 forEachSubcolumn方法，具体子类比如ColumnTuple， ColumnVector 会实现这个方法
     virtual void forEachSubcolumn(MutableColumnCallback) {}
 
     /// Default implementation calls the mutable overload using const_cast.
     using ColumnCallback = std::function<void(const WrappedPtr &)>;
+    // 这是一个virtual方法，实际上IColumn已经实现了它，但是没有实现 非const的 forEachSubcolumn
     virtual void forEachSubcolumn(ColumnCallback) const;
 
     /// Similar to forEachSubcolumn but it also do recursive calls.
@@ -579,11 +587,16 @@ public:
         finalized->finalize();
         return finalized;
     }
-
+    /**
+     * IColumn::mutate()
+     * @param ptr
+     * @return
+     */
     [[nodiscard]] static MutablePtr mutate(Ptr ptr)
     {
         MutablePtr res = ptr->shallowMutate(); /// Now use_count is 2.
         ptr.reset(); /// Reset use_count to 1.
+        // 深度拷贝
         res->forEachSubcolumn([](WrappedPtr & subcolumn) { subcolumn = IColumn::mutate(std::move(subcolumn).detach()); });
         return res;
     }

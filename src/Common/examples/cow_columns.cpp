@@ -18,13 +18,20 @@ public:
     virtual void set(int value) = 0;
 };
 
-using ColumnPtr = IColumn::Ptr;
-using MutableColumnPtr = IColumn::MutablePtr;
+using ColumnPtr = IColumn::Ptr; // 其实是 COW::immutable_ptr<Derived>
+using MutableColumnPtr = IColumn::MutablePtr; // COW::mutable_ptr<Derived>
 
+/**
+ *  ConcreteColumn
+ *     -> COWHelper<IColumn, ConcreteColumn> // Base: IColumn, Derived: ConcreteColumn
+ *        -> IColumn
+ *            -> COW<IColumn>  // Derived: IColumn
+ *               -> boost::intrusive_ref_counter<Derived> // Derived: IColumn
+ */
 class ConcreteColumn : public COWHelper<IColumn, ConcreteColumn>
 {
 private:
-    friend class COWHelper<IColumn, ConcreteColumn>;
+    friend class COWHelper<IColumn, ConcreteColumn>; // 友元函数，让基类可以访问ConcreteColumn的私有成员
 
     int data;
     explicit ConcreteColumn(int data_) : data(data_) {}
@@ -45,14 +52,32 @@ void print(const ColumnPtr & x, const ColPtr & y)
 
 int main(int, char **)
 {
-    ColumnPtr x = ConcreteColumn::create(1);
-    ColumnPtr y = x;
+    /**
+     * 该代码通过ConcreteColumn在演示一个完整故事：
+        -  ColumnPtr（只读共享）可以被拷贝共享
+        - 当你要修改时，必须 mutate()：
+        - 若共享（refcount>1）→ clone 出一份新对象（COW）
+        - 若独占（refcount==1）→ 直接返回可写句柄（不复制）
+        - 修改完成后，可把 MutablePtr move 给 Ptr，回到不可变共享态
+     */
+    // 其实就是 COWHelper<IColumn, ConcreteColumn>::create(1);， 因为ConcreteColumn继承了COWHelper的静态成员函数 create
+    ColumnPtr x = ConcreteColumn::create(1); // 返回一个 IColumn::Ptr
+    ColumnPtr y = x; // y = x：增加引用计数
     print(x, y);
+    /**
+     * x 指向 A，值 1，refcount 2
+     * y 指向 A，值 1，refcount 2
+     */
     chassert(x->get() == 1 && y->get() == 1);
     chassert(x->use_count() == 2 && y->use_count() == 2);
     chassert(x.get() == y.get());
 
     {
+        /**
+         * 在 COW 里：
+         *  若 use_count > 1：clone
+         *  否则：直接 assumeMutable（不 clone）
+         */
         MutableColumnPtr mut = IColumn::mutate(std::move(y));
         mut->set(2);
         print(x, mut);

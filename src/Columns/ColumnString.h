@@ -23,6 +23,12 @@ namespace DB
 class Arena;
 
 /** Column for String values.
+ *  ColumnString -
+ *     -> COWHelper<IColumnHelper<ColumnString>, ColumnString>  // Base: IColumnHelper<ColumnString>, Derived: ColumnString
+ *        -> IColumnHelper<ColumnString>   // Parent: IColumn , Derived: ColumnString
+ *            -> IColumn
+ *               -> COW<IColumn>
+ *                  -> boost::intrusive_ref_counter<Derived> // Derived: IColumn
   */
 class ColumnString final : public COWHelper<IColumnHelper<ColumnString>, ColumnString>
 {

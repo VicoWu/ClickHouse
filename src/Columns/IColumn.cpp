@@ -95,6 +95,7 @@ size_t IColumn::estimateCardinalityInPermutedRange(const IColumn::Permutation & 
 
 void IColumn::forEachSubcolumn(ColumnCallback callback) const
 {
+    // 先转成非const，然后调用const_cast，变成非const，然后调用forEachSubcolumn()，这会在具体的IColumn中实现
     const_cast<IColumn*>(this)->forEachSubcolumn([&callback](WrappedPtr & subcolumn)
     {
         callback(std::as_const(subcolumn));

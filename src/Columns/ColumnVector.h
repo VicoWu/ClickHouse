@@ -27,6 +27,15 @@ namespace ErrorCodes
 
 
 /** A template for columns that use a simple array to store.
+ * using ColumnUInt32 = ColumnVector<UInt32>;
+   using ColumnUInt64 = ColumnVector<UInt64>;
+ * ColumnVector
+ *   -> COWHelper  // Base:  IColumnHelper<ColumnVector<T> , Derived: ColumnVector<T>
+ *     -> IColumnHelper<ColumnVector<T>, ColumnFixedSizeHelper> // Derived: ColumnVector<T> , Parent: ColumnFixedSizeHelper
+ *        -> ColumnFixedSizeHelper
+ *          -> IColumn
+ *             -> COW<IColumn>
+ *                -> boost::intrusive_ref_counter<Derived> // Derived: IColumn
  */
 template <typename T>
 class ColumnVector final : public COWHelper<IColumnHelper<ColumnVector<T>, ColumnFixedSizeHelper>, ColumnVector<T>>
@@ -35,6 +44,7 @@ class ColumnVector final : public COWHelper<IColumnHelper<ColumnVector<T>, Colum
 
 private:
     using Self = ColumnVector;
+    // 让基类可以访问私有的构造函数
     friend class COWHelper<IColumnHelper<Self, ColumnFixedSizeHelper>, Self>;
 
     struct less;
