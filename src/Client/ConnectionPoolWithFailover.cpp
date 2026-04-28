@@ -176,11 +176,21 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
 ConnectionPoolWithFailover::Base::GetPriorityFunc ConnectionPoolWithFailover::makeGetPriorityFunc(const Settings & settings)
 {
     const size_t offset = settings.load_balancing_first_offset % nested_pools.size();
-    const LoadBalancing load_balancing = LoadBalancing(settings.load_balancing);
+    const LoadBalancing load_balancing = LoadBalancing(settings.load_balancing); // 根据设置的LB的策略，构造一个LoadBalancing对象
 
     return get_priority_load_balancing.getPriorityFunc(load_balancing, offset, nested_pools.size());
 }
 
+/**
+ * 在 getManyChecked中被调用
+ * @param settings
+ * @param pool_mode
+ * @param try_get_entry
+ * @param skip_unavailable_endpoints
+ * @param priority_func
+ * @param skip_read_only_replicas
+ * @return
+ */
 std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::getManyImpl(
     const Settings & settings,
     PoolMode pool_mode,
@@ -201,18 +211,19 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
 
     size_t max_tries = settings.connections_with_failover_max_tries;
     size_t max_entries;
+    // 根据PoolMode，设置min_entries和max_entries
     if (pool_mode == PoolMode::GET_ALL)
     {
-        min_entries = nested_pools.size();
+        min_entries = nested_pools.size(); // 所有
         max_entries = nested_pools.size();
     }
     else if (pool_mode == PoolMode::GET_ONE)
     {
-        max_entries = 1;
+        max_entries = 1; // 一个
     }
     else if (pool_mode == PoolMode::GET_MANY)
     {
-        max_entries = settings.max_parallel_replicas;
+        max_entries = settings.max_parallel_replicas; //
     }
     else
     {
@@ -220,24 +231,24 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
     }
 
     if (!priority_func)
-        priority_func = makeGetPriorityFunc(settings);
+        priority_func = makeGetPriorityFunc(settings); // 获取对应的Priority Function
 
     UInt64 max_ignored_errors = settings.distributed_replica_max_ignored_errors.value;
     bool fallback_to_stale_replicas = settings.fallback_to_stale_replicas_for_distributed_queries.value;
-
+    // PoolWithFailoverBase<TNestedPool>::getMany
     return Base::getMany(min_entries, max_entries, max_tries, max_ignored_errors, fallback_to_stale_replicas, skip_read_only_replicas, try_get_entry, priority_func);
 }
 
-ConnectionPoolWithFailover::TryResult
+ConnectionPoolWithFailover::TryResult // 返回选取的结果
 ConnectionPoolWithFailover::tryGetEntry(
-        const ConnectionPoolPtr & pool,
+        const ConnectionPoolPtr & pool, // 这个ConnectionPool是某一个Replica的connection pool
         const ConnectionTimeouts & timeouts,
         std::string & fail_message,
         const Settings & settings,
         const QualifiedTableName * table_to_check,
-        [[maybe_unused]] AsyncCallback async_callback)
+        [[maybe_unused]] AsyncCallback async_callback) // 默认是空的
 {
-#if defined(OS_LINUX)
+#if defined(OS_LINUX)  // Linux环境下可能支持异步callback
     if (async_callback)
     {
         ConnectionEstablisherAsync connection_establisher_async(pool, &timeouts, settings, log, table_to_check);
@@ -263,7 +274,7 @@ ConnectionPoolWithFailover::tryGetEntry(
     ConnectionEstablisher connection_establisher(pool, &timeouts, settings, log, table_to_check);
     TryResult result;
     connection_establisher.run(result, fail_message);
-    return result;
+    return result; // 返回从这个replica pool中选取的connection的结果
 }
 
 std::vector<ConnectionPoolWithFailover::Base::ShuffledPool>

@@ -242,12 +242,13 @@ void ReadFromRemote::addPipe(Pipes & pipes, const ClusterProxy::SelectStreamFact
     scalars["_shard_num"]
         = Block{{DataTypeUInt32().createColumnConst(1, shard.shard_info.shard_num), std::make_shared<DataTypeUInt32>(), "_shard_num"}};
 
-    if (context->canUseTaskBasedParallelReplicas())
+    if (context->canUseTaskBasedParallelReplicas()) // 当前是READ_TASKS模式
     {
         if (context->getSettingsRef().cluster_for_parallel_replicas.changed)
         {
+
             const String cluster_for_parallel_replicas = context->getSettingsRef().cluster_for_parallel_replicas;
-            if (cluster_for_parallel_replicas != cluster_name)
+            if (cluster_for_parallel_replicas != cluster_name) // 如果设置的cluster_for_parallel_replicas不是Dist表的cluster名字
                 LOG_INFO(
                     log,
                     "cluster_for_parallel_replicas has been set for the query but has no effect: {}. Distributed table cluster is "
@@ -257,7 +258,7 @@ void ReadFromRemote::addPipe(Pipes & pipes, const ClusterProxy::SelectStreamFact
         }
 
         LOG_TRACE(log, "Setting `cluster_for_parallel_replicas` to {}", cluster_name);
-        context->setSetting("cluster_for_parallel_replicas", cluster_name);
+        context->setSetting("cluster_for_parallel_replicas", cluster_name);// 设置这个并行replica的cluster信息
     }
 
     /// parallel replicas custom key case
@@ -315,7 +316,7 @@ void ReadFromRemote::addPipe(Pipes & pipes, const ClusterProxy::SelectStreamFact
             shard.shard_info.pool, query_string, shard.header, context, throttler, scalars, external_tables, stage);
         remote_query_executor->setLogger(log);
 
-        if (context->canUseTaskBasedParallelReplicas())
+        if (context->canUseTaskBasedParallelReplicas()) // 如果是READ_TASKS模式，那么只能使用一个Coordinator，因此PoolMode是GET_ONE
         {
             // when doing parallel reading from replicas (ParallelReplicasMode::READ_TASKS) on a shard:
             // establish a connection to a replica on the shard, the replica will instantiate coordinator to manage parallel reading from replicas on the shard.
@@ -328,6 +329,9 @@ void ReadFromRemote::addPipe(Pipes & pipes, const ClusterProxy::SelectStreamFact
         else
             remote_query_executor->setPoolMode(PoolMode::GET_MANY);
 
+        // 设置主表，因为主表会影响到对replica的选择，只选择replica上有该表、并且该表足够细新
+        // 如果已经设置了Shard 的main_table，则使用，如果没有，则使用构造 ReadFromRemote对象时传入到 main_table，比如，dist表查询的时候
+        // main_table就是dist表背后的ReplicatedMergeTree的表
         if (!table_func_ptr)
             remote_query_executor->setMainTable(shard.main_table ? shard.main_table : main_table);
 

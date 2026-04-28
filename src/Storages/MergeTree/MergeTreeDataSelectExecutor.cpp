@@ -273,6 +273,8 @@ MergeTreeDataSelectSamplingData MergeTreeDataSelectExecutor::getSampling(
     auto parallel_replicas_mode = context->getParallelReplicasMode();
     /// Parallel replicas has been requested but there is no way to sample data.
     /// Select all data from first replica and no data from other replicas.
+    // 虽然我们有多个replica，并且当前的ParallelReplicasMode的确是SAMPLE_KEY模式，但是比如当前的表不支持sample，那么是无法使用
+    // SAMPLE的，这时候，其实是退化到使用第一个replica提供全部数据
     if (settings.parallel_replicas_count > 1 && parallel_replicas_mode == Context::ParallelReplicasMode::SAMPLE_KEY
         && !data.supportsSampling() && settings.parallel_replica_offset > 0)
     {

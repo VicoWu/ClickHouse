@@ -47,13 +47,15 @@ class SelectStreamFactory
 {
 public:
 
-    struct Shard
+    struct Shard // 这里的Shard指的是分布式查询的一个切分，而不是ClickHouse的物理上的Shard， ShardInfo才是物理的Shard
     {
         /// Query and header may be changed depending on shard.
         ASTPtr query;
         QueryTreeNodePtr query_tree;
 
         /// Used to check the table existence on remote node
+        // // 这个Shard需要关心的某个表是否存在，这是main_table我们基本可以认为是用户query中的主表，比如，
+        // 我们查询一个dist表的时候，这里的main table就是这张 Distributed 表底层真正远端要查的那张本地表
         StorageID main_table;
         Block header;
 

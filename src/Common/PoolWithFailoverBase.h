@@ -51,7 +51,7 @@ class PoolWithFailoverBase : private boost::noncopyable
 public:
     using NestedPool = TNestedPool;
     using NestedPoolPtr = std::shared_ptr<NestedPool>;
-    using Entry = typename NestedPool::Entry;
+    using Entry = typename NestedPool::Entry; // IConnectionPool::Entry，实际上是 PoolBase<Connection>::Entry;
     using NestedPools = std::vector<NestedPoolPtr>;
 
     PoolWithFailoverBase(
@@ -75,11 +75,16 @@ public:
 
         void reset() { *this = {}; }
 
-        Entry entry; /// use isNull() to check if connection is established
+        Entry entry; /// use isNull() to check if connection is established  // 真正拿到的连接
         bool is_usable = false; /// if connection is established, then can be false only with table check
                                 /// if table is not present on remote peer, -> it'll be false
+
+
+        // 这个replica是否是up-to-date的，我们判断up-to-date的依据是根据max_replica_delay_for_distributed_queries配置
+        // 的最大的delay的时间
         bool is_up_to_date = false; /// If true, the entry is a connection to up-to-date replica
-                                    /// Depends on max_replica_delay_for_distributed_queries setting
+                                    /// Depends on max_replica_delay_for_distributed_queries settings
+        // delay的时间
         UInt32 delay = 0; /// Helps choosing the "least stale" option when all replicas are stale.
         bool is_readonly = false;   /// Table is in read-only mode, INSERT can ignore such replicas.
     };
@@ -159,15 +164,25 @@ protected:
 };
 
 
+/**
+ * 在 PoolWithFailoverBase<TNestedPool>::getMany 中被调用
+ * @tparam TNestedPool
+ * @param max_ignored_errors
+ * @param get_priority
+ * @param use_slowdown_count
+ * @return
+ */
 template <typename TNestedPool>
-std::vector<typename PoolWithFailoverBase<TNestedPool>::ShuffledPool>
+std::vector<typename PoolWithFailoverBase<TNestedPool>::ShuffledPool> //返回一个ShufflledPool的vector
 PoolWithFailoverBase<TNestedPool>::getShuffledPools(
     size_t max_ignored_errors, const PoolWithFailoverBase::GetPriorityFunc & get_priority, bool use_slowdown_count)
 {
     /// Update random numbers and error counts.
     PoolStates pool_states = updatePoolStates(max_ignored_errors);
-    if (get_priority)
+    if (get_priority) // 如果定义了get_priority function
     {
+        // 每一个pool的priority,get_priority输入当前的pool的索引，返回这个pool的priority(一个uint64，值越小优先级越高)
+        // 我们从 PoolState::compare可以看到，这里计算得到的priority只是最后的优先级决策的其中一个因素，并且也不是第一考量因素
         for (size_t i = 0; i < pool_states.size(); ++i)
             pool_states[i].priority = get_priority(i);
     }
@@ -186,7 +201,7 @@ PoolWithFailoverBase<TNestedPool>::getShuffledPools(
             return PoolState::compare(*lhs.state, *rhs.state, use_slowdown_count);
         });
 
-    return shuffled_pools;
+    return shuffled_pools; // 返回排序以后的ShuffledPool的集合
 }
 
 template <typename TNestedPool>
@@ -230,6 +245,8 @@ PoolWithFailoverBase<TNestedPool>::getMany(
         const TryGetEntryFunc & try_get_entry,
         const GetPriorityFunc & get_priority)
 {
+    // 注意，这里的一个ShuffledPool针对的是某一个Replica的连接池，
+    // 所以，整个shuffled_pools是针对某一个Shard的所有Replica的连接池集合
     std::vector<ShuffledPool> shuffled_pools = getShuffledPools(max_ignored_errors, get_priority);
 
     /// Limit `max_tries` value by `max_error_cap` to avoid unlimited number of retries
@@ -254,6 +271,7 @@ PoolWithFailoverBase<TNestedPool>::getMany(
     {
         for (size_t i = 0; i < shuffled_pools.size(); ++i)
         {
+            // 已经拿到了Shard内足够的Replica的ShuffledPool
             if (up_to_date_count >= max_entries /// Already enough good entries.
                 || entries_count + failed_pools_count >= nested_pools.size()) /// No more good entries will be produced.
             {
@@ -272,10 +290,10 @@ PoolWithFailoverBase<TNestedPool>::getMany(
             if (!fail_message.empty())
                 fail_messages += fail_message + '\n';
 
-            if (!result.entry.isNull())
+            if (!result.entry.isNull()) // 不为空
             {
                 ++entries_count;
-                if (result.is_usable)
+                if (result.is_usable) // 可用
                 {
                     if (skip_read_only_replicas && result.is_readonly)
                         ProfileEvents::increment(ProfileEvents::DistributedConnectionSkipReadOnlyReplica);
@@ -289,6 +307,7 @@ PoolWithFailoverBase<TNestedPool>::getMany(
             }
             else
             {
+                // 失败，继续
                 LOG_WARNING(log, "Connection failed at try №{}, reason: {}", (shuffled_pool.error_count + 1), fail_message);
 
                 shuffled_pool.error_count = std::min(max_error_cap, shuffled_pool.error_count + 1);
@@ -302,10 +321,10 @@ PoolWithFailoverBase<TNestedPool>::getMany(
         }
     }
 
-    if (usable_count < min_entries)
+    if (usable_count < min_entries) // 没有找到最小数量的Replica
         throw DB::NetException(DB::ErrorCodes::ALL_CONNECTION_TRIES_FAILED,
                 "All connection tries failed. Log: \n\n{}\n", fail_messages);
-
+    // 删除不可用的Replica
     std::erase_if(try_results, [&](const TryResult & r) { return isTryResultInvalid(r, skip_read_only_replicas); });
 
     /// Sort so that preferred items are near the beginning.
@@ -313,6 +332,7 @@ PoolWithFailoverBase<TNestedPool>::getMany(
             try_results.begin(), try_results.end(),
             [](const TryResult & left, const TryResult & right)
             {
+                //  update_to_date的在不是update_to_date的前面，delay小的在前面
                 return std::forward_as_tuple(!left.is_up_to_date, left.delay)
                     < std::forward_as_tuple(!right.is_up_to_date, right.delay);
             });
@@ -347,9 +367,9 @@ struct PoolWithFailoverBase<TNestedPool>::PoolState
     /// The number of slowdowns that led to changing replica in HedgedRequestsFactory
     UInt64 slowdown_count = 0;
     /// Priority from the <remote_server> configuration.
-    Priority config_priority{1};
+    Priority config_priority{1}; // 配置在配置文件中的priority
     /// Priority from the GetPriorityFunc.
-    Priority priority{0};
+    Priority priority{0}; // GetPriorityFunc所计算出来的Priority
     UInt64 random = 0;
 
     void randomize()
@@ -359,6 +379,10 @@ struct PoolWithFailoverBase<TNestedPool>::PoolState
 
     static bool compare(const PoolState & lhs, const PoolState & rhs, bool use_slowdown_count)
     {
+        /**
+         * 把每个 replica 的状态压成一个排序 key，谁的 key 更小，谁优先级更高。
+         * 可以看到， error_count的优先级最高，config_priority的优先级比priority的优先级更高
+         */
         if (use_slowdown_count)
             return std::forward_as_tuple(lhs.error_count, lhs.slowdown_count, lhs.config_priority, lhs.priority, lhs.random)
                 < std::forward_as_tuple(rhs.error_count, rhs.slowdown_count, rhs.config_priority, rhs.priority, rhs.random);

@@ -225,20 +225,34 @@ RemoteQueryExecutor::RemoteQueryExecutor(
 
         if (main_table)
         {
+            /// 读主表时，除了“拿到连接”之外，还要额外检查这个副本是否适合当前查询：
+            /// - 表是否存在；
+            /// - 副本是否可用；
+            /// - 副本是否足够新（up-to-date），必要时可以回退到 stale replica。
+            /// 因此这里不能直接调用 getMany()，而是要调用 getManyChecked()。
+            ///
+            /// 返回值不是裸连接，而是 TryResult：
+            /// - entry: 实际拿到的连接句柄；
+            /// - is_usable / is_up_to_date / delay / is_readonly: 这个副本对当前查询的状态信息。
             auto try_results = pool->getManyChecked(
                 timeouts,
                 current_settings,
                 pool_mode,
-                main_table.getQualifiedName(),
+                main_table.getQualifiedName(), // 需要检查的表，即，在查找合适的Replica的时候，需要确认这个Replica上有这张表以及是否足够新
                 std::move(async_callback),
                 skip_unavailable_endpoints,
                 priority_func);
+
+            /// 这里真正需要交给后续查询执行层的是连接本身，
+            /// 所以把每个 TryResult 里的 entry 抽出来，放进 connection_entries。
             connection_entries.reserve(try_results.size());
             for (auto & try_result : try_results)
                 connection_entries.emplace_back(std::move(try_result.entry));
         }
         else
         {
+            /// 没有 main_table 时，不需要做“表存在 / 副本延迟”这类检查，
+            /// 直接按照 pool_mode、load_balancing 和 failover 策略获取连接即可。
             connection_entries = pool->getMany(
                 timeouts, current_settings, pool_mode, std::move(async_callback), skip_unavailable_endpoints, priority_func);
         }

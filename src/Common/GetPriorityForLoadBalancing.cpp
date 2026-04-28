@@ -10,6 +10,13 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
 }
 
+/**
+ * 根据用户设置的LoadBalance策略，返回对应的get_priority function，这个function
+ * @param load_balance
+ * @param offset
+ * @param pool_size
+ * @return
+ */
 GetPriorityForLoadBalancing::Func
 GetPriorityForLoadBalancing::getPriorityFunc(LoadBalancing load_balance, size_t offset, size_t pool_size) const
 {

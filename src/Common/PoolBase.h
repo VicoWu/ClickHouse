@@ -58,11 +58,11 @@ private:
       */
     struct PoolEntryHelper
     {
-        explicit PoolEntryHelper(PooledObject & data_) : data(data_) { data.in_use = true; }
+        explicit PoolEntryHelper(PooledObject & data_) : data(data_) { data.in_use = true; } // 构造的时候设置in_user=true
         ~PoolEntryHelper()
         {
             std::lock_guard lock(data.pool.mutex);
-            data.in_use = false;
+            data.in_use = false;  // 析构的时候in_user=false
             data.pool.available.notify_one();
         }
 
@@ -114,11 +114,18 @@ public:
     private:
         std::shared_ptr<PoolEntryHelper> data;
 
+        /**
+         * 一个PoolEntryHelper封装了一个 PooledObject， 这个PooledObject里面通过in_use来代表现在是否正在使用
+         * @param object
+         */
         explicit Entry(PooledObject & object) : data(std::make_shared<PoolEntryHelper>(object)) {}
     };
 
     virtual ~PoolBase() = default;
 
+    /**
+     * PoolBase::get()方法，从PoolBase中获取一个Entry
+     */
     /** Allocates the object. Wait for free object in pool for 'timeout'. With 'timeout' < 0, the timeout is infinite. */
     Entry get(Poco::Timespan::TimeDiff timeout)
     {
@@ -128,7 +135,7 @@ public:
         {
             for (auto & item : items)
             {
-                if (!item->in_use)
+                if (!item->in_use) //
                 {
                     if (likely(!item->is_expired))
                     {

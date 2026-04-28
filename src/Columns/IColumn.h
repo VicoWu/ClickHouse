@@ -50,6 +50,7 @@ struct EqualRange
 using EqualRanges = std::vector<EqualRange>;
 
 /// Declares interface to store columns in memory.
+// 为IColumn赋予对应的COW功能
 class IColumn : public COW<IColumn>
 {
 private:
@@ -588,15 +589,20 @@ public:
         return finalized;
     }
     /**
-     * IColumn::mutate()
+     * 静态方法 IColumn::mutate()
      * @param ptr
      * @return
      */
     [[nodiscard]] static MutablePtr mutate(Ptr ptr)
     {
+        /**
+         * 返回一个MutablePtr<Derived>，这里的
+         */
         MutablePtr res = ptr->shallowMutate(); /// Now use_count is 2.
         ptr.reset(); /// Reset use_count to 1.
-        // 深度拷贝
+        // 深度拷贝，可以看到，res的forEachSubcolumn会遍历每一个subcolumn，每一个subcolumn都是一个变色龙，
+        // 然后基于每一个chameleon_ptr<Derived> subcolumn，把subcolumn中的value给detach出来，然后递归调用 IColumn::mutate()
+        // 如果subcolumn还是复合类型，那么还会继续递归调用IColumn::mutate()
         res->forEachSubcolumn([](WrappedPtr & subcolumn) { subcolumn = IColumn::mutate(std::move(subcolumn).detach()); });
         return res;
     }

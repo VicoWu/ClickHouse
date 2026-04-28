@@ -26,6 +26,7 @@ struct Settings;
 class IConnectionPool : private boost::noncopyable
 {
 public:
+    // IConnectionPool使用PoolBase进行Pool的管理，而Pool所管理的对象是connection
     using Entry = PoolBase<Connection>::Entry;
 
     IConnectionPool() = default;

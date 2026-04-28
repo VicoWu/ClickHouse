@@ -5595,22 +5595,33 @@ std::shared_ptr<AsyncReadCounters> Context::getAsyncReadCounters() const
     return async_read_counters;
 }
 
+/**
+ * 在
+ * @return
+ */
 Context::ParallelReplicasMode Context::getParallelReplicasMode() const
 {
     const auto & settings_ref = getSettingsRef();
 
     using enum Context::ParallelReplicasMode;
+    // 如果配置了parallel_replicas_custom_key表达式，那么就走 CUSTOM_KEY
     if (!settings_ref.parallel_replicas_custom_key.value.empty())
         return CUSTOM_KEY;
-
+    // 如果开启了 allow_experimental_parallel_reading_from_replicas， 那么就READ_TASKS模式
     if (settings_ref.allow_experimental_parallel_reading_from_replicas > 0)
         return READ_TASKS;
 
-    return SAMPLE_KEY;
+    return SAMPLE_KEY; // 默认，SAMPLE_KEY模式，但是很显然，前提是这个表支持SAMPLE KEY
 }
 
+/**
+ * 如果当前的确支持并行replica，并且当前的ParallelReplicasMode
+ *      是READ_TASKS(用户enable了allow_experimental_parallel_reading_from_replicas)
+ * @return
+ */
 bool Context::canUseTaskBasedParallelReplicas() const
 {
+    // 如果当前配置允许使用多个Replica进行读取操作，并且当前的并行Replica模式是READ_TASKS这个experimental模式
     const auto & settings_ref = getSettingsRef();
     return getParallelReplicasMode() == ParallelReplicasMode::READ_TASKS && settings_ref.max_parallel_replicas > 1;
 }
@@ -5625,6 +5636,10 @@ bool Context::canUseParallelReplicasOnFollower() const
     return canUseTaskBasedParallelReplicas() && getClientInfo().collaborate_with_initiator;
 }
 
+/**
+ * 如果的确设置的支持多replica，并且当前的并行replica模式是CUSTOM_KEY模式
+ * @return
+ */
 bool Context::canUseParallelReplicasCustomKey() const
 {
     return settings->max_parallel_replicas > 1 && getParallelReplicasMode() == Context::ParallelReplicasMode::CUSTOM_KEY;

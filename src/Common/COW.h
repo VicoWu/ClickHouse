@@ -194,6 +194,7 @@ public:
 protected:
     // 返回一个 mutable_ptr<Derived>，这个方法是一个protect方法，意味着只有子类能调用，比如COWHelper
     // 这里的shallowMutate()不是进行修改的含义，而是准备进行修改，所以拷贝一份出来“供修改”
+    // 区别于子类的shallowMutate
     MutablePtr shallowMutate() const
     {
         // 这个use_count定义在boost::intrusive_ref_counter中
@@ -232,7 +233,8 @@ protected:
     class chameleon_ptr /// NOLINT
     {
         /**
-         * chameleon_ptr 本质上更像一个 “默认共享只读句柄” , 但它提供非 const 的 get()/operator->/operator*，把你带到可写世界 ,
+         * 变色龙封装的是一个immutable_ptr，而不是一个mutable_ptr，因此， chameleon_ptr 本质上更像一个 “默认共享的只读句柄” ,
+         * 但它提供非 const 的 get()/operator->/operator*，把我们带到可写的世界 ,
          * 换句话说：它把“是否可写”绑定到你拿到的是 const 还是非 const 的 chameleon_ptr。
          */
     private:
@@ -271,8 +273,8 @@ protected:
         T * get() { return &value->assumeMutableRef(); }
 
         // 这里重载了操作符->
-        const T * operator->() const { return get(); } // const版本
-        T * operator->() { return get(); }  // 非const版本
+        const T * operator->() const { return get(); } // const版本,，这里会直接调用const T * get() const
+        T * operator->() { return get(); }  // 非const版本，这里会调用 T * get()
 
         // 重载了操作符*
         const T & operator*() const { return *value; }
@@ -284,6 +286,13 @@ protected:
         operator immutable_ptr<T> & () { return value; } /// NOLINT
 
         /// Get internal immutable ptr. Does not change internal use counter.
+        /**
+         * detach方法有一个右值修饰符 && ，这是一个编译期间检查机制，它规定这个 detach() 方法只能被右值对象调用。
+         * detach 的意思是“剥离”。这个限定符在编译期强制要求：只有当你准备销毁或弃用当前的变色龙指针时（比如执行了 std::move(res->wrapped)），
+         * 你才被允许调用它。这防止了开发者在不小心的情况下，把一个还在使用的指针给“掏空”了。
+         * 注意，detach是非const函数，意味着只有非const的 chameleon_ptr 才能被detach
+         * @return
+         */
         immutable_ptr<T> detach() && { return std::move(value); }
 
         // 禁止隐式转换，必须显式转换，转换为bool的逻辑是: 是否为空指针
@@ -342,12 +351,13 @@ template <typename Base, typename Derived>
 class COWHelper : public Base
 {
 private:
+    // 典型的CRTP用法，Derived调用derived()就可以获得对应的子类指针
     Derived * derived() { return static_cast<Derived *>(this); }
     const Derived * derived() const { return static_cast<const Derived *>(this); }
 
 public:
     /**
-     * 这里，Base只是一个模板参数,因此前面必须添加typename告诉编译器: Base::immutable_ptr是一个类型，而不是一个变量
+     * 这里，Base只是一个模板参数，编译期间并不确定这个模板参数对应的具体类,因此前面必须添加typename告诉编译器: Base::immutable_ptr是一个类型，而不是一个变量
      * 模板不关心“你是谁”，只关心“你有没有我要的东西”。
      * 这里的代码这么写，必须要求Base中含有immutable_ptr和mutable_ptr，即遵循接口契约（interface contract）
      * 在当前的代码中，COW是满足要求的: 含有 immutable_ptr和mutable_ptr,因此如果编译的时候Base是COW，那么就可以编译通过
@@ -365,7 +375,8 @@ public:
     /**
      * COWHelper::clone()，实际运行时继承了virtual IColumn::clone() = 0 方法
      * 写时拷贝, 由于Base是一个模板类，因此需要添加typename声明
-     * 这里clone()是在Base(IColumn)里面定义的virtual函数，具体的clone() 实现这里放在COWHelper里面
+     * 这里clone()是在Base(IColumn)里面定义的virtual函数，具体的clone() 实现这里放在COWHelper里面，因为COWHelper是从接口类(IColumn)到具体实现类(ColumnVector)
+     * 的桥接类，所以，这里就对具体类进行拷贝构造
      * 在
      * @return
      */
@@ -373,6 +384,8 @@ public:
 
 protected:
     // COWHelper中的shallowMutate()会调用父类COW的COW::shallowMutate()
-    // 这里的Derived是 ConcreteColumn
+    // 这里的Derived是 ConcreteColumn，
+    // static_cast<Derived *>(Base::shallowMutate().get()) 是典型的CRTP风格(编译期多态)，调用者肯定是Derived类型
+    // Base::shallowMutate() 返回的是 Base::MutablePtr，但我们需要的是 Derived::MutablePtr。所以 COWHelper 必须 把“基类指针包装”转换成“具体类指针包装”，于是就多了一层封装
     MutablePtr shallowMutate() const { return MutablePtr(static_cast<Derived *>(Base::shallowMutate().get())); }
 };
