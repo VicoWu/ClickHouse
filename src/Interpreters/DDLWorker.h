@@ -110,14 +110,14 @@ protected:
 
     /// Iterates through queue tasks in ZooKeeper, runs execution of new tasks
     void scheduleTasks(bool reinitialized);
-
+    void processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper);
     DDLTaskBase & saveTask(DDLTaskPtr && task);
 
     /// Reads entry and check that the host belongs to host list of the task
     /// Returns non-empty DDLTaskPtr if entry parsed and the check is passed
     virtual DDLTaskPtr initAndCheckTask(const String & entry_name, String & out_reason, const ZooKeeperPtr & zookeeper);
 
-    void processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper);
+
     void updateMaxDDLEntryID(const String & entry_name);
 
     /// Check that query should be executed on leader replica only

@@ -36,7 +36,6 @@ public:
     }
 
     virtual ~IConnectionPool() = default;
-
     /// Selects the connection to work.
     virtual Entry get(const ConnectionTimeouts & timeouts) = 0;
     /// If force_connected is false, the client must manually ensure that returned connection is good.

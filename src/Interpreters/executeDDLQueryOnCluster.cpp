@@ -446,7 +446,7 @@ Chunk DDLQueryStatusSource::generate()
 
     String node_to_wait = "finished";
     if (is_replicated_database && context->getSettingsRef().database_replicated_enforce_synchronous_settings)
-        node_to_wait = "synced"; // 默认情况下， DatabaseReplicated开启了database_replicated_enforce_synchronous_settings
+        node_to_wait = "synced"; // 默认情况下， DatabaseReplicated开启了 database_replicated_enforce_synchronous_settings
 
     size_t try_number = 0;
 

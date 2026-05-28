@@ -156,27 +156,33 @@ void MultiplexedConnections::sendQuery(
     /// all servers involved in the distributed query processing.
     modified_settings.set("allow_experimental_analyzer", static_cast<bool>(modified_settings.allow_experimental_analyzer));
 
+    /// Offset parallel replicas 场景：
+    /// initiator 会把同一份 query 发给多个 replica connections，
+    /// 并通过 parallel_replicas_count / parallel_replica_offset 告诉每个远端 replica 自己负责哪一份数据。
     const bool enable_offset_parallel_processing = context->canUseOffsetParallelReplicas();
 
     size_t num_replicas = replica_states.size();
     if (num_replicas > 1)
     {
         if (enable_offset_parallel_processing)
-            /// Use multiple replicas for parallel query processing.
+            /// 参与本次并行读取的 replica 总数。
             modified_settings.parallel_replicas_count = num_replicas;
 
         for (size_t i = 0; i < num_replicas; ++i)
         {
             if (enable_offset_parallel_processing)
+                /// 当前连接对应的 replica 编号，从 0 开始。
+                /// 远端 InterpreterSelectQuery 会根据这个 offset 生成本 replica 的 custom key / sample filter。
                 modified_settings.parallel_replica_offset = i;
 
+            /// query 字符串本身相同；不同 replica 的分工通过 modified_settings 中的 offset 表达。
             replica_states[i].connection->sendQuery(
                 timeouts, query, /* query_parameters */ {}, query_id, stage, &modified_settings, &client_info, with_pending_data, {});
         }
     }
     else
     {
-        /// Use single replica.
+        /// 只有一个 replica connection 时，不需要设置 parallel replica offset。
         replica_states[0].connection->sendQuery(
             timeouts, query, /* query_parameters */ {}, query_id, stage, &modified_settings, &client_info, with_pending_data, {});
     }

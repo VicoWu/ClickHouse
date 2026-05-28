@@ -602,7 +602,8 @@ void Cluster::addShard(
             shard_local_addresses.push_back(replica);
     }
     // 这个Shard内的所有的replica构成一个可以进行failover的ConnectionPoolWithFailoverPtr对象
-    // 但是其实，对于一个Shard内的每一个replica本身，它也是一个pool
+    // 但是其实，对于一个Shard内的每一个replica本身，它也是一个pool，因为可能有多个查询在同时使用这个Replica的数据，因此到这个Replica
+    // 有很多的链接
     ConnectionPoolWithFailoverPtr shard_pool = std::make_shared<ConnectionPoolWithFailover>(
         all_replicas_pools,
         settings.load_balancing,

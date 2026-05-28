@@ -261,20 +261,26 @@ void ReadFromRemote::addPipe(Pipes & pipes, const ClusterProxy::SelectStreamFact
         context->setSetting("cluster_for_parallel_replicas", cluster_name);// 设置这个并行replica的cluster信息
     }
 
-    /// parallel replicas custom key case
+    /// Custom key 并行副本场景：initiator 会把一个 shard query 拆成多份 per-replica query。
+    /// 每个 replica 拿到一份 clone 后的 query，并带上自己的 custom key filter，从而避免读取范围重叠。
     if (shard.shard_filter_generator)
     {
         for (size_t i = 0; i < shard.shard_info.per_replica_pools.size(); ++i)
         {
+            /// 每个 replica 的 WHERE filter 不同，所以修改前必须先 clone query AST。
             auto query = shard.query->clone();
             auto & select_query = query->as<ASTSelectQuery &>();
+            /// shard_filter_generator 使用从 1 开始的 replica 编号，
+            /// 返回当前 replica 对应的 custom key filter。
             auto shard_filter = shard.shard_filter_generator(i + 1);
             if (shard_filter)
             {
                 auto where_expression = select_query.where();
                 if (where_expression)
+                    /// 保留原始 WHERE 条件，并额外叠加当前 replica 的 filter。
                     shard_filter = makeASTFunction("and", where_expression, shard_filter);
 
+                /// 改写 clone 后的 query，使它只读取分配给当前 replica 的 custom-key 范围。
                 select_query.setExpression(ASTSelectQuery::Expression::WHERE, std::move(shard_filter));
             }
 
@@ -298,6 +304,8 @@ void ReadFromRemote::addPipe(Pipes & pipes, const ClusterProxy::SelectStreamFact
                 std::nullopt,
                 priority_func);
             remote_query_executor->setLogger(log);
+            /// 上面的循环已经按 replica 拆好了 query；
+            /// 当前 executor 只需要把这份带 filter 的 query 发给一个 replica。
             remote_query_executor->setPoolMode(PoolMode::GET_ONE);
 
             if (!table_func_ptr)
@@ -330,7 +338,7 @@ void ReadFromRemote::addPipe(Pipes & pipes, const ClusterProxy::SelectStreamFact
             remote_query_executor->setPoolMode(PoolMode::GET_MANY);
 
         // 设置主表，因为主表会影响到对replica的选择，只选择replica上有该表、并且该表足够细新
-        // 如果已经设置了Shard 的main_table，则使用，如果没有，则使用构造 ReadFromRemote对象时传入到 main_table，比如，dist表查询的时候
+        // 如果已经设置了Shard 的main_table，则使用，如果没有，则使用构造 ReadFromRemote 对象时传入到 main_table，比如，dist表查询的时候
         // main_table就是dist表背后的ReplicatedMergeTree的表
         if (!table_func_ptr)
             remote_query_executor->setMainTable(shard.main_table ? shard.main_table : main_table);

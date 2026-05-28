@@ -245,14 +245,19 @@ PoolWithFailoverBase<TNestedPool>::getMany(
         const TryGetEntryFunc & try_get_entry,
         const GetPriorityFunc & get_priority)
 {
-    // 注意，这里的一个ShuffledPool针对的是某一个Replica的连接池，
-    // 所以，整个shuffled_pools是针对某一个Shard的所有Replica的连接池集合
+    /// 先把所有候选子池排好序。
+    /// 这里每个 ShuffledPool 通常就对应一个 replica 的连接池；
+    /// 因而整个 shuffled_pools 可以理解为“某个 shard 下所有候选 replica pools 的尝试顺序”。
     std::vector<ShuffledPool> shuffled_pools = getShuffledPools(max_ignored_errors, get_priority);
 
     /// Limit `max_tries` value by `max_error_cap` to avoid unlimited number of retries
     max_tries = std::min(max_tries, max_error_cap);
 
-    /// We will try to get a connection from each pool until a connection is produced or max_tries is reached.
+    /// try_results 与 shuffled_pools 一一对应，记录“对每个 pool 的尝试结果”。
+    /// 注意这里不是只统计有没有连上，还要区分：
+    /// - entry 是否拿到；
+    /// - replica 是否可用（is_usable）；
+    /// - replica 是否足够新（is_up_to_date）。
     std::vector<TryResult> try_results(shuffled_pools.size());
     size_t entries_count = 0;
     size_t usable_count = 0;
@@ -271,7 +276,9 @@ PoolWithFailoverBase<TNestedPool>::getMany(
     {
         for (size_t i = 0; i < shuffled_pools.size(); ++i)
         {
-            // 已经拿到了Shard内足够的Replica的ShuffledPool
+            /// 停止条件：
+            /// 1. 已经拿够 max_entries 个“最新副本”结果；
+            /// 2. 所有 pool 要么已经成功拿到结果，要么已经被判定失败，再试也没有意义。
             if (up_to_date_count >= max_entries /// Already enough good entries.
                 || entries_count + failed_pools_count >= nested_pools.size()) /// No more good entries will be produced.
             {
@@ -284,16 +291,19 @@ PoolWithFailoverBase<TNestedPool>::getMany(
             if (max_tries && (shuffled_pool.error_count >= max_tries || !result.entry.isNull()))
                 continue;
 
+            /// try_get_entry 是由上层传进来的“单次尝试”逻辑：
+            /// 它负责从这个 pool 里试着拿一个连接，并顺手做资格检查
+            /// （例如表是否存在、副本是否最新、是否只读等）。
             std::string fail_message;
             result = try_get_entry(shuffled_pool.pool, fail_message);
 
             if (!fail_message.empty())
                 fail_messages += fail_message + '\n';
 
-            if (!result.entry.isNull()) // 不为空
+            if (!result.entry.isNull()) // 建连成功
             {
                 ++entries_count;
-                if (result.is_usable) // 可用
+                if (result.is_usable) // 连接拿到了，而且这个 replica 对当前请求也可用
                 {
                     if (skip_read_only_replicas && result.is_readonly)
                         ProfileEvents::increment(ProfileEvents::DistributedConnectionSkipReadOnlyReplica);
@@ -307,7 +317,10 @@ PoolWithFailoverBase<TNestedPool>::getMany(
             }
             else
             {
-                // 失败，继续
+                /// 这次对当前 pool 的单次尝试失败：
+                /// 1. 记录日志；
+                /// 2. 提高这个 pool 的 error_count；
+                /// 3. 如果达到 max_tries，就把它视为本轮彻底失败。
                 LOG_WARNING(log, "Connection failed at try №{}, reason: {}", (shuffled_pool.error_count + 1), fail_message);
 
                 shuffled_pool.error_count = std::min(max_error_cap, shuffled_pool.error_count + 1);
@@ -324,24 +337,25 @@ PoolWithFailoverBase<TNestedPool>::getMany(
     if (usable_count < min_entries) // 没有找到最小数量的Replica
         throw DB::NetException(DB::ErrorCodes::ALL_CONNECTION_TRIES_FAILED,
                 "All connection tries failed. Log: \n\n{}\n", fail_messages);
-    // 删除不可用的Replica
+    /// 删除无效结果：包括没连上、不可用，以及在 insert 场景下需要跳过的只读副本。
     std::erase_if(try_results, [&](const TryResult & r) { return isTryResultInvalid(r, skip_read_only_replicas); });
 
-    /// Sort so that preferred items are near the beginning.
+    /// 最终结果再按“新鲜度”做一次排序：
+    /// - up-to-date 的放前面；
+    /// - stale 之间按 delay 从小到大排，优先保留“没那么旧”的副本。
     std::stable_sort(
             try_results.begin(), try_results.end(),
             [](const TryResult & left, const TryResult & right)
             {
-                //  update_to_date的在不是update_to_date的前面，delay小的在前面
+                // up_to_date 的在前，delay 小的在前。
                 return std::forward_as_tuple(!left.is_up_to_date, left.delay)
                     < std::forward_as_tuple(!right.is_up_to_date, right.delay);
             });
 
     if (fallback_to_stale_replicas)
     {
-        /// There is not enough up-to-date entries but we are allowed to return stale entries.
-        /// Gather all up-to-date ones and least-bad stale ones.
-
+        /// 允许回退到 stale replica 时：
+        /// 返回前 max_entries 个结果即可，因为排序后前面已经是“最佳可用集合”。
         size_t size = std::min(try_results.size(), max_entries);
         try_results.resize(size);
     }
@@ -350,7 +364,7 @@ PoolWithFailoverBase<TNestedPool>::getMany(
         if (try_results.size() < up_to_date_count)
             throw DB::Exception(DB::ErrorCodes::LOGICAL_ERROR, "Could not find enough connections for up-to-date results. Got: {}, needed: {}", try_results.size(), up_to_date_count);
 
-        /// There is enough up-to-date entries.
+        /// 不允许回退到 stale 时，只保留最新副本结果。
         try_results.resize(up_to_date_count);
     }
     else

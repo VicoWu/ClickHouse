@@ -230,14 +230,21 @@ static ThrottlerPtr getThrottler(const ContextPtr & context)
 AdditionalShardFilterGenerator
 getShardFilterGeneratorForCustomKey(const Cluster & cluster, ContextPtr context, const ColumnsDescription & columns)
 {
+    /// 只有“一个 shard 多个 replicas”的 custom key parallel replicas 场景，
+    /// 才需要在 initiator 侧为每个 replica 预先生成不同的过滤条件。
     if (!context->canUseParallelReplicasCustomKeyForCluster(cluster))
         return {};
 
     const auto & settings = context->getSettingsRef();
+    /// 把用户配置的 parallel_replicas_custom_key 解析成 AST。
+    /// 解析失败时返回空 generator，后续就不会走 per-replica query 改写。
     auto custom_key_ast = parseCustomKeyForTable(settings.parallel_replicas_custom_key, *context);
     if (custom_key_ast == nullptr)
         return {};
 
+    /// 返回一个 "replica_num -> filter AST" 的函数。
+    /// ReadFromRemote::addPipe() 会按 replica 编号调用它，
+    /// 给同一个 shard 下的每个 replica 生成互不重叠的 custom key filter。
     return [my_custom_key_ast = std::move(custom_key_ast),
             column_description = columns,
             custom_key_type = settings.parallel_replicas_custom_key_filter_type.value,
@@ -246,6 +253,7 @@ getShardFilterGeneratorForCustomKey(const Cluster & cluster, ContextPtr context,
             query_context = context,
             replica_count = cluster.getShardsInfo().front().per_replica_pools.size()](uint64_t replica_num) -> ASTPtr
     {
+        /// replica_num 传入时从 1 开始，getCustomKeyFilterForParallelReplica() 使用从 0 开始的 replica offset。
         return getCustomKeyFilterForParallelReplica(
             replica_count,
             replica_num - 1,

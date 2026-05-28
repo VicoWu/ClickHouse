@@ -118,11 +118,15 @@ std::vector<IConnectionPool::Entry> ConnectionPoolWithFailover::getMany(
     std::optional<bool> skip_unavailable_endpoints,
     GetPriorityForLoadBalancing::Func priority_func)
 {
+    /// 这是最基础的“拿多个副本连接”的入口。
+    /// 和 getManyChecked() 的区别是：这里只关心连接本身，不额外检查某张表在副本上的状态。
     TryGetEntryFunc try_get_entry = [&](const NestedPoolPtr & pool, std::string & fail_message)
     { return tryGetEntry(pool, timeouts, fail_message, settings, nullptr, async_callback); };
 
+    /// 真正的挑副本、重试和 failover 都在 getManyImpl() 里做。
     std::vector<TryResult> results = getManyImpl(settings, pool_mode, try_get_entry, skip_unavailable_endpoints, priority_func);
 
+    /// 上一层只需要连接句柄，所以这里把 TryResult 里的 entry 抽出来返回。
     std::vector<Entry> entries;
     entries.reserve(results.size());
     for (auto & result : results)
@@ -152,9 +156,13 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
     std::optional<bool> skip_unavailable_endpoints,
     GetPriorityForLoadBalancing::Func priority_func)
 {
+    /// 这一层和 getMany() 的区别很简单：
+    /// 不只是“拿连接”，还要顺手检查这张表在这个副本上是不是可用、够不够新。
     TryGetEntryFunc try_get_entry = [&](const NestedPoolPtr & pool, std::string & fail_message)
     { return tryGetEntry(pool, timeouts, fail_message, settings, &table_to_check, async_callback); };
 
+    /// 后面的通用逻辑都交给 getManyImpl()：
+    /// 它会按 pool_mode 决定拿几个副本，再按优先级顺序去试。
     return getManyImpl(settings, pool_mode, try_get_entry, skip_unavailable_endpoints, priority_func);
 }
 
@@ -177,20 +185,16 @@ ConnectionPoolWithFailover::Base::GetPriorityFunc ConnectionPoolWithFailover::ma
 {
     const size_t offset = settings.load_balancing_first_offset % nested_pools.size();
     const LoadBalancing load_balancing = LoadBalancing(settings.load_balancing); // 根据设置的LB的策略，构造一个LoadBalancing对象
-
+    // 由LoadBalancing对象直接提供对应的GetPriorityFunc实现
     return get_priority_load_balancing.getPriorityFunc(load_balancing, offset, nested_pools.size());
 }
 
-/**
- * 在 getManyChecked中被调用
- * @param settings
- * @param pool_mode
- * @param try_get_entry
- * @param skip_unavailable_endpoints
- * @param priority_func
- * @param skip_read_only_replicas
- * @return
- */
+/// 这是 shard 内挑副本的统一入口。
+/// 它自己不关心“怎么检查一个副本”，那部分由 try_get_entry 决定；
+/// 它只负责：
+/// 1. 这次最少/最多拿几个副本；
+/// 2. 按什么顺序试；
+/// 3. 失败了要不要切到下一个副本。
 std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::getManyImpl(
     const Settings & settings,
     PoolMode pool_mode,
@@ -204,26 +208,33 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
             DB::ErrorCodes::ALL_CONNECTION_TRIES_FAILED,
             "Cannot get connection from ConnectionPoolWithFailover cause nested pools are empty");
 
+    /// 没显式传的话，就沿用 skip_unavailable_shards。
     if (!skip_unavailable_endpoints.has_value())
         skip_unavailable_endpoints = settings.skip_unavailable_shards;
 
+    /// 至少要拿到几个副本：
+    /// - 允许跳过不可用 shard 时，0 个也能接受；
+    /// - 否则至少得有 1 个。
     size_t min_entries = skip_unavailable_endpoints.value() ? 0 : 1;
 
     size_t max_tries = settings.connections_with_failover_max_tries;
     size_t max_entries;
-    // 根据PoolMode，设置min_entries和max_entries
+    /// 最多拿几个副本连接。
     if (pool_mode == PoolMode::GET_ALL)
     {
-        min_entries = nested_pools.size(); // 所有
+        /// 全拿。
+        min_entries = nested_pools.size();
         max_entries = nested_pools.size();
     }
     else if (pool_mode == PoolMode::GET_ONE)
     {
-        max_entries = 1; // 一个
+        /// 只拿一个。
+        max_entries = 1;
     }
     else if (pool_mode == PoolMode::GET_MANY)
     {
-        max_entries = settings.max_parallel_replicas; //
+        /// 最多拿 max_parallel_replicas 个。
+        max_entries = settings.max_parallel_replicas;
     }
     else
     {
@@ -231,11 +242,12 @@ std::vector<ConnectionPoolWithFailover::TryResult> ConnectionPoolWithFailover::g
     }
 
     if (!priority_func)
-        priority_func = makeGetPriorityFunc(settings); // 获取对应的Priority Function
+        /// 没传优先级函数，就按 load_balancing 现算一个。
+        priority_func = makeGetPriorityFunc(settings);
 
     UInt64 max_ignored_errors = settings.distributed_replica_max_ignored_errors.value;
     bool fallback_to_stale_replicas = settings.fallback_to_stale_replicas_for_distributed_queries.value;
-    // PoolWithFailoverBase<TNestedPool>::getMany
+    /// 真正开始按顺序试副本、做 failover。
     return Base::getMany(min_entries, max_entries, max_tries, max_ignored_errors, fallback_to_stale_replicas, skip_read_only_replicas, try_get_entry, priority_func);
 }
 

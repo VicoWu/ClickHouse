@@ -368,9 +368,9 @@ void DDLWorker::scheduleTasks(bool reinitialized)
                    last_skipped_entry_name ? *last_skipped_entry_name : "none");
 
     if (max_tasks_in_queue < queue_nodes.size())
-        cleanup_event->set();
+        cleanup_event->set(); // 置位cleanup_event，这会触发cleanup
 
-    // 此时从keeper中获取的所有任务节点，必须和当前内存中正在执行的任务的list进行边界的确定，放置重复或者遗漏
+    // 此时从keeper中获取的所有任务节点，必须和当前内存中正在执行的任务的list进行边界的确定，防止重复或者遗漏
     /// Detect queue start, using:
     /// - skipped tasks
     /// - in memory tasks (that are currently active or were finished recently)
@@ -389,8 +389,8 @@ void DDLWorker::scheduleTasks(bool reinitialized)
         String last_task_name;
         if (!current_tasks.empty())
             last_task_name = current_tasks.back()->entry_name; // 当前内存中的最后一个任务
-        // 如果存在最后被skip掉的entry，并且，current_tasks的最后一个task对应的skip掉的entry的后面(即，last_skipped_entry_name的id比当前内存中的最后一个task的id更大)，
-        // 那么，最后一个需要执行的task就是last_skipped_entry_name
+        // 如果存在最后被skip掉的entry，并且，current_tasks的最后一个task在最后skip掉的entry的后面(即，last_skipped_entry_name的id比当前内存中的最后一个task的id更大)，
+        // 那么，最后一个需要执行的task就是 last_skipped_entry_name
         if (last_skipped_entry_name && last_task_name < *last_skipped_entry_name)
             last_task_name = *last_skipped_entry_name;
         // 已经在内存中的任务，不需要再从queue中放入内存
@@ -794,7 +794,7 @@ void DDLWorker::processTask(DDLTaskBase & task, const ZooKeeperPtr & zookeeper)
             bool status_written_by_table_or_db = task.ops.empty();
             bool is_replicated_database_task = dynamic_cast<DatabaseReplicatedTask *>(&task);
             if (status_written_by_table_or_db || is_replicated_database_task)
-            {   // 如果是replicated_database_task，那么直接返回失败，抛出异常，上层调用者在runMainThread中负责重试
+            {   // 如果是 replicated_database_task，那么直接返回失败，抛出异常，上层调用者在 runMainThread 中负责重试
                 throw Exception(ErrorCodes::UNFINISHED, "Unexpected error: {}", task.execution_status.message);
             }
             else

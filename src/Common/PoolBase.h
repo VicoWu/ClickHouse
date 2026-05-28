@@ -45,10 +45,10 @@ private:
         {
         }
 
-        ObjectPtr object;
-        bool in_use = false;
-        std::atomic<bool> is_expired = false;
-        PoolBase & pool;
+        ObjectPtr object; // 被管理的对象
+        bool in_use = false;  // 是否正在使用
+        std::atomic<bool> is_expired = false; // 是否已经过期
+        PoolBase & pool; // 这个PooledObject所在的PoolBase
     };
 
     using Objects = std::vector<std::shared_ptr<PooledObject>>;
