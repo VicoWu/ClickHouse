@@ -19,7 +19,9 @@ namespace ErrorCodes
     extern const int CANNOT_SET_TIMER_PERIOD;
     extern const int CANNOT_READ_FROM_SOCKET;
 }
-
+/**
+ * TimerDescriptor 是 ClickHouse 对 Linux timerfd 的封装：把「定时器」做成一个普通的文件描述符，可以像 socket 一样交给 epoll 监听。
+ */
 TimerDescriptor::TimerDescriptor()
 {
     timer_fd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK | TFD_CLOEXEC);

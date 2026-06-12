@@ -15,18 +15,27 @@ namespace ErrorCodes
     extern const int LOGICAL_ERROR;
 }
 
+/**
+ * 构造函数
+ */
 Epoll::Epoll() : events_count(0)
 {
-    epoll_fd = epoll_create1(0);
+    epoll_fd = epoll_create1(0);//  创建epoll实例
     if (epoll_fd == -1)
         throw ErrnoException(ErrorCodes::EPOLL_ERROR, "Cannot open epoll descriptor");
 }
 
+/**
+ * 移动构造函数
+ */
 Epoll::Epoll(Epoll && other) noexcept : epoll_fd(other.epoll_fd), events_count(other.events_count.load())
 {
     other.epoll_fd = -1;
 }
 
+/**
+ * 移动赋值
+ */
 Epoll & Epoll::operator=(Epoll && other) noexcept
 {
     epoll_fd = other.epoll_fd;
@@ -34,6 +43,7 @@ Epoll & Epoll::operator=(Epoll && other) noexcept
     events_count.store(other.events_count.load());
     return *this;
 }
+
 
 void Epoll::add(int fd, void * ptr, uint32_t events)
 {
@@ -45,7 +55,7 @@ void Epoll::add(int fd, void * ptr, uint32_t events)
         event.data.fd = fd;
 
     ++events_count;
-
+    // 向 epoll 实例中添加想要监听的套接字/文件描述符。
     if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, fd, &event) == -1)
         throw ErrnoException(ErrorCodes::EPOLL_ERROR, "Cannot add new descriptor to epoll");
 }
@@ -53,7 +63,7 @@ void Epoll::add(int fd, void * ptr, uint32_t events)
 void Epoll::remove(int fd)
 {
     --events_count;
-
+    // 向 epoll 实例中删除想要监听的套接字/文件描述符。
     if (epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, nullptr) == -1)
         throw ErrnoException(ErrorCodes::EPOLL_ERROR, "Cannot remove descriptor from epoll");
 }
@@ -67,6 +77,7 @@ size_t Epoll::getManyReady(int max_events, epoll_event * events_out, int timeout
     int ready_size;
     while (true)
     {
+        // 等待epoll_fd上面的事件发生
         ready_size = epoll_wait(epoll_fd, events_out, max_events, timeout);
 
         /// If `ready_size` = 0, it's timeout.

@@ -42,8 +42,9 @@ public:
         }
 
         std::unique_ptr<ConnectionEstablisherAsync> connection_establisher;
-        TimerDescriptor change_replica_timeout;
-        bool is_ready = false;
+        /// 这个change_replica_timeout在 HedgedConnectionFatory指的是建立连接的timeout。在HedgedConnections.cpp中也有定义，指的是receive_data_timeout
+        TimerDescriptor change_replica_timeout; // 构造 ReplicaStatus的时候，会构造一个 TimerDescriptor对象，这个timeout在factory层，通过hedged_connection_timeout来设置。 要和ReplicaState区分开。
+        bool is_ready = false; // 默认是 不ready 的状态
     };
 
     HedgedConnectionsFactory(

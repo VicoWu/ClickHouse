@@ -66,7 +66,7 @@ public:
 
     /// Get file descriptor that can be added in epoll and be polled,
     /// when this fd becomes ready, you call resume establishing connection.
-    int getFileDescriptor() { return epoll.getFileDescriptor(); }
+    int getFileDescriptor() { return epoll.getFileDescriptor(); } // 返回这个ConnectionEstablisherAsync对应的epoll本身的监控器fd，而不是这个epoll内部的timeout fd或者socket fd
 
     /// Check if the process of connection establishing was finished.
     /// The process is considered finished if connection is ready,

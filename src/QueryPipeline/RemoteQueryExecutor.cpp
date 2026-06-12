@@ -215,7 +215,7 @@ RemoteQueryExecutor::RemoteQueryExecutor(
 
 #if defined(OS_LINUX)
         if (current_settings[Setting::use_hedged_requests])
-        {
+        {M
             std::shared_ptr<QualifiedTableName> table_to_check = nullptr;
             if (main_table)
                 table_to_check = std::make_shared<QualifiedTableName>(main_table.getQualifiedName());

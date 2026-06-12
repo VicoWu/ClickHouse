@@ -32,16 +32,20 @@ public:
     using PacketReceiverPtr = std::unique_ptr<PacketReceiver>;
     struct ReplicaState
     {
+        // 通过一个Connection，来构造这个Replica的ReplicaState
         explicit ReplicaState(Connection * connection_) : connection(connection_), packet_receiver(std::make_unique<PacketReceiver>(connection_))
         {
         }
 
         Connection * connection = nullptr;
         PacketReceiverPtr packet_receiver;
+        // 构造 ReplicaState 的时候，会构造一个 TimerDescriptor 对象，这个timeout在HedgedConnection层，通过 receive_data_timeout 来设置。 需要和ReplicaStatus区分开。
         TimerDescriptor change_replica_timeout;
         bool is_change_replica_timeout_expired = false;
     };
 
+
+    // 一个OffsetState中存放了相同的offset的一组replica
     struct OffsetState
     {
         /// Replicas with the same offset.
@@ -50,24 +54,47 @@ public:
         /// active_connection_count is always <= 1 (because we stopped working with
         /// other replicas with the same offset)
         size_t active_connection_count = 0;
-        bool can_change_replica = true;
+        bool can_change_replica = true; // 初始状态下，因为还没有开始hedge，因此是可以change_replica的
 
         /// This flag is true when this offset is in queue for
         /// new replicas. It's needed to process receive timeout
         /// (throw an exception when receive timeout expired and there is no
         /// new replica in process)
+        /**
+         * 2s receive_data_timeout 到期（getReadyReplicaLocation）
+            → next_replica_in_process = true
+            → offsets_queue.push(offset)
+            → startNewReplica()                    // Factory 开始建「下一 replica」
+            …… 可能 NOT_READY，Factory epoll 等 ……
+            processNewReplicaState(READY)
+            → emplace_back 第二路、active_connection_count++
+            → pipeline.run(sendQuery)              // 第二路才开始跑查询
+            → next_replica_in_process = false
+         */
         bool next_replica_in_process = false;
     };
 
-    /// We process events in epoll, so we need to determine replica by it's
-    /// file descriptor. We store map fd -> replica location. To determine
-    /// where replica is, we need a replica offset
-    /// (the same as parallel_replica_offset), and index, which is needed because
-    /// we can have many replicas with same offset (when receive_data_timeout has expired).
+    /// epoll_wait returns a file descriptor (socket, receive_data_timeout timerfd, etc.).
+    /// We need to map that fd back to the corresponding replica connection.
+    /// Maps fd_to_replica_location and timeout_fd_to_replica_location store this mapping.
+    ///
+    /// Replica data is organized as offset_states[offset].replicas[index]:
+    ///   offset — which parallel read lane within this shard (same as parallel_replica_offset setting).
+    ///            When max_parallel_replicas > 1, one shard may have several lanes reading different
+    ///            parts of data in parallel (offset 0, 1, 2, ...). This is NOT the shard number.
+    ///   index  — which hedged connection within the same offset (0 = first connection,
+    ///            1 = second connection started after receive_data_timeout expired, ...).
+    ///            index is needed because hedged requests keep the old replica alive and add a new one
+    ///            with the same offset.
+    ///
+    /// Example:
+    ///   offset_states[0].replicas[0] — lane 0, first replica (initial connection)
+    ///   offset_states[0].replicas[1] — lane 0, hedged second replica (after 2s timeout)
+    ///   offset_states[1].replicas[0] — lane 1, first replica
     struct ReplicaLocation
     {
-        size_t offset;
-        size_t index;
+        size_t offset; /// parallel_replica_offset：本 shard 内第几路并行读，0/1/2…，不是 shard 编号
+        size_t index;  /// 同一 offset 下第几条 hedged 连接：0=第一路，1=receive_data_timeout 后的第二路…
     };
 
     HedgedConnections(
@@ -77,6 +104,7 @@ public:
         const ThrottlerPtr & throttler,
         PoolMode pool_mode,
         std::shared_ptr<QualifiedTableName> table_to_check_ = nullptr,
+        /// using AsyncCallback = std::function<void(int, Poco::Timespan, AsyncEventTimeoutType, const std::string &, uint32_t)>;
         AsyncCallback async_callback = {},
         GetPriorityForLoadBalancing::Func priority_func = {});
 
@@ -105,6 +133,9 @@ public:
         throw Exception(ErrorCodes::LOGICAL_ERROR, "sendMergeTreeReadTaskResponse in not supported with HedgedConnections");
     }
 
+    /**
+     *
+     */
     Packet receivePacket() override;
 
     Packet receivePacketUnlocked(AsyncCallback async_callback) override;
@@ -183,7 +214,7 @@ private:
     std::queue<int> offsets_queue;
 
     /// The current number of valid connections to the replicas of this shard.
-    size_t active_connection_count = 0;
+    size_t active_connection_count = 0; // 当前这个shard的所有的active connection 的数量，如果是parallel replica，则是所有的offset的active_connection_count的和
 
     /// We count offsets in which we can't change replica anymore,
     /// it's needed to cancel choosing new replicas when we
@@ -203,7 +234,7 @@ private:
 
     Packet last_received_packet;
 
-    Epoll epoll;
+    Epoll epoll; // 构造了一个EPoll对象
     ContextPtr context;
     const Settings & settings;
     ThrottlerPtr throttler;

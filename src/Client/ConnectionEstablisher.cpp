@@ -35,12 +35,20 @@ namespace FailPoints
     extern const char replicated_merge_tree_all_replicas_stale[];
 }
 
+/**
+ * 被ConnectionEstablisher封装起来的、实际进行链接建立的类，不对外暴露，对外暴露的是 ConnectionEstablisherAsync
+ * @param pool_
+ * @param timeouts_
+ * @param settings_
+ * @param log_
+ * @param table_to_check_
+ */
 ConnectionEstablisher::ConnectionEstablisher(
-    ConnectionPoolPtr pool_,
-    const ConnectionTimeouts * timeouts_,
+    ConnectionPoolPtr pool_, // 某一个 replica 的连接池
+    const ConnectionTimeouts * timeouts_, // 连接、握手、读超时等
     const Settings & settings_,
     LoggerPtr log_,
-    const QualifiedTableName * table_to_check_)
+    const QualifiedTableName * table_to_check_) // 分布式表名，用于 TablesStatus；可为空
     : pool(std::move(pool_)), timeouts(timeouts_), settings(settings_), log(log_), table_to_check(table_to_check_)
 {
 }
@@ -141,13 +149,13 @@ void ConnectionEstablisher::run(ConnectionEstablisher::TryResult & result, std::
 #if defined(OS_LINUX)
 
 ConnectionEstablisherAsync::ConnectionEstablisherAsync(
-    ConnectionPoolPtr pool_,
+    ConnectionPoolPtr pool_, // 某一个 replica 的连接池
     const ConnectionTimeouts * timeouts_,
     const Settings & settings_,
     LoggerPtr log_,
     const QualifiedTableName * table_to_check_)
     : AsyncTaskExecutor(std::make_unique<Task>(*this))
-    , connection_establisher(std::move(pool_), timeouts_, settings_, log_, table_to_check_)
+    , connection_establisher(std::move(pool_), timeouts_, settings_, log_, table_to_check_) // 内部使用ConnectionEstablisher
 {
     epoll.add(timeout_descriptor.getDescriptor());
 }
