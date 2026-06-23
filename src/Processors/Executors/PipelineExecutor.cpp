@@ -473,37 +473,55 @@ SlotAllocationPtr PipelineExecutor::allocateCPU(size_t num_threads, bool concurr
 
         if (query_context)
         {
+            // 两步查找，不要混淆：
+            //   (1) WorkloadEntityStorage 存的是 resource 名字（全局 CREATE RESOURCE 时写入，如 "cpu"）
+            //   (2) WorkloadClassifier::get(name) 把名字解析成 ResourceLink（指向调度器队列的指针）
+            //
+            // 例：CREATE RESOURCE cpu (WORKER THREAD) 只设置 worker_thread_resource="cpu"，
+            //     master_thread_resource 为空 → master_thread_link 始终为空 →
+            //     CPUSlotsAllocation 里 master 线程不发 ResourceRequest（non-competing，立即启动）
             String master_thread_resource_name = query_context->getWorkloadEntityStorage().getMasterThreadResourceName();
             if (!master_thread_resource_name.empty())
                 master_thread_link = query_context->getWorkloadClassifier()->get(master_thread_resource_name);
             String worker_thread_resource_name = query_context->getWorkloadEntityStorage().getWorkerThreadResourceName();
             if (!worker_thread_resource_name.empty())
                 worker_thread_link = query_context->getWorkloadClassifier()->get(worker_thread_resource_name);
+
+            // 只看名字是否配置过，不看 link 是否解析成功
+            // （名字有但 link 为空：resource 尚未加载进 classifier，见下方 fall-through）
             workload_cpu_scheduling_is_enabled = !master_thread_resource_name.empty() || !worker_thread_resource_name.empty();
         }
 
         if (workload_cpu_scheduling_is_enabled)
         {
+            // link 至少一个非空才真正走 Workload Scheduler；
+            // 两个 link 都为空时本分支不 return，落到函数末尾的 GrantedAllocation（无限制，等同未启用调度）
             if (master_thread_link || worker_thread_link) // Only use resource scheduler if at least one resource link is specified, otherwise unlimited
             {
                 /// Allocate CPU slots through resource scheduler
+                // cpu_slot_preemption（server setting）决定两种实现：
                 if (query_context->getCPUSlotPreemption())
                 {
+                    // CPULeaseAllocation：按时间片租约 CPU，线程周期性 renew() 上报实际消耗；
+                    // 续租失败则 preempt（tasks.preempt），资源可用后 resume（tasks.resume），
+                    // 超时则 downscale。适合需要按实际 CPU 用量公平分配的场景。
                     auto quantum_ns = std::max<UInt64>(10, query_context->getCPUSlotQuantum());
                     return std::make_shared<CPULeaseAllocation>(num_threads, master_thread_link, worker_thread_link,
                         CPULeaseSettings
                         {
-                            .quantum_ns = static_cast<ResourceCost>(quantum_ns),
-                            .report_ns = static_cast<ResourceCost>(quantum_ns / 10),
-                            .preemption_timeout = std::chrono::milliseconds(query_context->getCPUSlotPreemptionTimeout()),
+                            .quantum_ns = static_cast<ResourceCost>(quantum_ns),       // 单次租约时长，到期须 renew
+                            .report_ns = static_cast<ResourceCost>(quantum_ns / 10),   // 累计消耗达此值才向 scheduler 上报
+                            .preemption_timeout = std::chrono::milliseconds(query_context->getCPUSlotPreemptionTimeout()), // 被抢占后最多等多久再放弃 slot
                             .on_preempt = [this](size_t slot_id) { tasks.preempt(slot_id); },
                             .on_resume = [this](size_t slot_id) { tasks.resume(slot_id); },
-                            .workload = query_context->getSettingsRef()[Setting::workload],
+                            .workload = query_context->getSettingsRef()[Setting::workload], // 查询级 workload，决定进哪个调度队列
                             .trace_cpu_scheduling = trace_cpu_scheduling,
                         });
                 }
                 else
                 {
+                    // CPUSlotsAllocation：静态 slot，向 scheduler 发 ResourceRequest，grant 后才能 acquire；
+                    // 空的 link 对应侧为 non-competing（不发请求，立即获得 slot）
                     return std::make_shared<CPUSlotsAllocation>(master_threads, worker_threads, master_thread_link, worker_thread_link);
                 }
             }

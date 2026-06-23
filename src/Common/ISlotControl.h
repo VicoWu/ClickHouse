@@ -29,6 +29,9 @@ namespace DB
 //
 // TODO:
 // - for memory allocations - variable size of slots (in bytes).
+//
+// Slot 分配与控制的抽象接口层。状态机：free -> granted -> acquired。
+// 典型用法：allocate(min, max) -> tryAcquire() -> IAcquiredSlot 析构时 release。
 
 /// Number of slots
 using SlotCount = UInt64;
@@ -37,6 +40,7 @@ using SlotCount = UInt64;
 constexpr SlotCount UnlimitedSlots = std::numeric_limits<SlotCount>::max();
 
 /// Acquired slot holder. Slot is considered to be acquired as long as the object exists.
+/// 已 acquire 的 slot 持有者（RAII）；析构时由子类负责 release
 class IAcquiredSlot : public std::enable_shared_from_this<IAcquiredSlot>, boost::noncopyable
 {
 public:
@@ -53,6 +57,7 @@ using AcquiredSlotPtr = std::shared_ptr<IAcquiredSlot>;
 
 /// Lease provides a slot for a limited time duration.
 /// Specialization of IAcquiredSlot that supports preemption.
+/// 带租约的 slot，支持抢占；到期需 renew 续租
 class ISlotLease : public IAcquiredSlot
 {
 public:
@@ -76,6 +81,7 @@ using SlotLeasePtr = std::shared_ptr<ISlotLease>;
 
 /// Request for allocation of slots from ISlotControl.
 /// Allows for more slots to be acquired and the whole request to be canceled.
+/// 一次 slot 分配请求；allocate(min, max) 创建，析构时自动 free
 class ISlotAllocation : public std::enable_shared_from_this<ISlotAllocation>, boost::noncopyable
 {
 public:
@@ -107,6 +113,7 @@ public:
 };
 
 /// Allocation that grants all the slots immediately on creation
+/// 简单实现：一次性 grant 全部 slot，不参与 scheduler 竞争
 class GrantedAllocation : public ISlotAllocation
 {
 public:
@@ -117,9 +124,11 @@ public:
 
     [[nodiscard]] AcquiredSlotPtr tryAcquire() override
     {
+        // use_concurrency_control=0 时使用：创建时已 grant 全部 slot，无 scheduler 竞争
         SlotCount value = granted.load();
         while (value)
         {
+            // CAS 取走一个 slot；slot_id = total - value 表示第几个被取走（从 0 递增）
             if (granted.compare_exchange_strong(value, value - 1))
                 return std::make_shared<IAcquiredSlot>(total - value);
         }
@@ -137,5 +146,6 @@ private:
     const SlotCount total; // thread-safe constant total number of slots
     std::atomic<SlotCount> granted; // allocated, but not yet acquired
 };
+
 
 }

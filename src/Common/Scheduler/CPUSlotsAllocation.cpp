@@ -117,8 +117,10 @@ CPUSlotsAllocation::~CPUSlotsAllocation()
 
 [[nodiscard]] AcquiredSlotPtr CPUSlotsAllocation::tryAcquire()
 {
+    // Workload CPU Scheduler 不可抢占版；逻辑类似 fair_round_robin，但向 ResourceLink.queue 发请求
     // First try acquire non-competing slot (if any)
     SlotCount value = noncompeting.load();
+    // 对应 ResourceLink 为空的一侧（如仅 WORKER THREAD 时 master 侧）：不发 ResourceRequest
     while (value)
     {
         if (value == exception_value)
@@ -130,18 +132,21 @@ CPUSlotsAllocation::~CPUSlotsAllocation()
         if (noncompeting.compare_exchange_strong(value, value - 1))
         {
             ProfileEvents::increment(ProfileEvents::ConcurrencyControlSlotsAcquiredNonCompeting, 1);
+            // request=nullptr：析构时不 finish ResourceRequest，不占 Workload 配额
             return AcquiredSlotPtr(new AcquiredCPUSlot({}, nullptr, last_slot_id.fetch_add(1, std::memory_order_relaxed)));
         }
     }
 
     // If all non-competing slots are already acquired - try acquire granted competing slot
     value = granted.load();
+    // scheduler grant 后进入 granted 计数，此处 CAS 取走
     while (value)
     {
         if (granted.compare_exchange_strong(value, value - 1))
         {
             std::unique_lock lock{schedule_mutex};
             // Grant noncompeting postponed slots if any, see grant()
+            // 下一 slot 若是 noncompeting（对侧 link 为空），先记入 noncompeting 而非继续排队
             while (allocated < total_slots && !getCurrentQueue(lock))
             {
                 allocated++;
@@ -151,6 +156,7 @@ CPUSlotsAllocation::~CPUSlotsAllocation()
             // Make and return acquired slot
             ProfileEvents::increment(ProfileEvents::ConcurrencyControlSlotsAcquired, 1);
             size_t index = last_acquire_index.fetch_add(1, std::memory_order_relaxed);
+            // request 非空：析构时 finish()，释放 Workload scheduler 上的 CPU slot
             return AcquiredSlotPtr(new AcquiredCPUSlot(shared_from_this(), &requests[index], last_slot_id.fetch_add(1, std::memory_order_relaxed)));
         }
     }

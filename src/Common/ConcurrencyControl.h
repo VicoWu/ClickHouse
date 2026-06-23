@@ -106,20 +106,20 @@ public:
         }
 
         // Grant single slot to allocation, returns true iff more slot(s) are required
-        bool grant();
+        bool grant(); // 调用一次只grant一个slot
 
         // Release one slot and grant it to other allocation if required
-        void release();
+        void release(); // 调用一次只release一个slot
 
-        ConcurrencyControlRoundRobinScheduler & parent;
+        ConcurrencyControlRoundRobinScheduler & parent; // 这个Allocation所属的ConcurrenyControl对象
         const SlotCount limit;
 
         mutable std::mutex mutex; // the following values must be accessed under this mutex
-        SlotCount allocated; // allocated total (including already `released`)
-        SlotCount released = 0;
+        SlotCount allocated; // 总共allocated的Slot的数量，包含历史上已经被release的  allocated total (including already `released`)
+        SlotCount released = 0; // 总共release的数量
         size_t last_slot_id = 0;
 
-        std::atomic<SlotCount> granted; // allocated, but not yet acquired
+        std::atomic<SlotCount> granted; // allocated, but not yet acquired 这是当前的实时值，已经allocated，但是还没有acquired
 
         const Waiters::iterator waiter; // iterator to itself in Waiters list; valid iff allocated < limit
     };
@@ -172,6 +172,7 @@ public:
     };
 
     // Manages group of slots for a single query, see ConcurrencyControl::allocate(min, max)
+    // 管理一个query的资源分配请求
     struct Allocation : public ISlotAllocation
     {
         ~Allocation() override;
@@ -211,8 +212,9 @@ public:
         SlotCount allocated; // allocated total excluding non-competing (including already `released`)
         SlotCount released = 0;
         size_t last_slot_id = 0;
-
+        // non-competing的slots的数量，不占用全局配额
         std::atomic<SlotCount> noncompeting; // allocated noncompeting slots, but not yet acquired
+        // competing的slots的数量，占用全局配额
         std::atomic<SlotCount> granted; // allocated competing slots, but not yet acquired
 
         const Waiters::iterator waiter; // iterator to itself in Waiters list; valid iff allocated < limit
@@ -240,6 +242,9 @@ private:
 
     ConcurrencyControl & parent;
     ConcurrencyControlState & state;
+    // 进入waiter，说明第一次进行allocate的时候并没有grant全部的请求，需要放到waiter队列继续等待分配，分配的时机是: 有release发生
+    // 对于fairRRscheduler，请求的数量是max - min，即non-competing slots不计入到请求里面，不占用slot 配额，只有competing部分占用slot 佩尔
+    // 对于RRscheduler， 请求的数量是max，包含了non-competing和competing，都占用slot配额
     Waiters waiters;
     Waiters::iterator cur_waiter; // round-robin pointer
 };

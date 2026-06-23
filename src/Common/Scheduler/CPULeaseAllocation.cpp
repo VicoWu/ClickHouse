@@ -245,13 +245,16 @@ void CPULeaseAllocation::free()
 
 [[nodiscard]] AcquiredSlotPtr CPULeaseAllocation::tryAcquire()
 {
+    // Workload CPU Scheduler 可抢占版（cpu_slot_preemption=true）；需持锁，无 CAS 快路径
     if (!acquirable.load(std::memory_order_relaxed))
         return {}; // shortcut to avoid unnecessary mutex locking
+    // acquirable=false：已无 granted 且正在等 scheduler 补充，避免无效加锁
 
     std::unique_lock lock{mutex};
     if (exception)
         throw Exception(ErrorCodes::RESOURCE_ACCESS_DENIED, "CPU Resource request failed: {}", getExceptionMessage(exception, /* with_stacktrace = */ false));
     if (granted > 0)
+        // 取走一个 granted，创建 Lease；线程运行中需周期性 renew()，失败则 preempt
         return acquireImpl(lock);
     return {};
 }
